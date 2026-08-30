@@ -100,18 +100,26 @@ def init_db():
         """)
 
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS key_heatmap (
-            key_code INTEGER PRIMARY KEY,
-            count INTEGER NOT NULL DEFAULT 0
+        CREATE TABLE IF NOT EXISTS key_heatmap_v2 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date_str TEXT NOT NULL,
+            key_code INTEGER NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(date_str, key_code)
         )
         """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_key_heat_date ON key_heatmap_v2(date_str)")
 
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS mouse_heatmap (
-            button_name TEXT PRIMARY KEY,
-            count INTEGER NOT NULL DEFAULT 0
+        CREATE TABLE IF NOT EXISTS mouse_heatmap_v2 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date_str TEXT NOT NULL,
+            button_name TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(date_str, button_name)
         )
         """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_mouse_heat_date ON mouse_heatmap_v2(date_str)")
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS app_settings (
@@ -178,36 +186,101 @@ def record_input_heatmap_chunk(key_counts: Dict[int, int], mouse_counts: Dict[st
     if not key_counts and not mouse_counts:
         return
 
+    now = datetime.datetime.now()
+    date_str = now.strftime("%Y-%m-%d")
+
     init_db()
     with get_db() as conn:
         cursor = conn.cursor()
         for k_code, k_count in key_counts.items():
             cursor.execute("""
-            INSERT INTO key_heatmap (key_code, count) VALUES (?, ?)
-            ON CONFLICT(key_code) DO UPDATE SET count = count + ?
-            """, (k_code, k_count, k_count))
+            INSERT INTO key_heatmap_v2 (date_str, key_code, count) VALUES (?, ?, ?)
+            ON CONFLICT(date_str, key_code) DO UPDATE SET count = count + ?
+            """, (date_str, k_code, k_count, k_count))
 
         for m_btn, m_count in mouse_counts.items():
             cursor.execute("""
-            INSERT INTO mouse_heatmap (button_name, count) VALUES (?, ?)
-            ON CONFLICT(button_name) DO UPDATE SET count = count + ?
-            """, (m_btn, m_count, m_count))
+            INSERT INTO mouse_heatmap_v2 (date_str, button_name, count) VALUES (?, ?, ?)
+            ON CONFLICT(date_str, button_name) DO UPDATE SET count = count + ?
+            """, (date_str, m_btn, m_count, m_count))
 
         conn.commit()
 
-def get_keyboard_heatmap_data() -> Dict[int, int]:
+def get_keyboard_heatmap_data(range_type: str = "day", target_date: Optional[str] = None) -> Dict[int, int]:
     init_db()
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT key_code, count FROM key_heatmap")
-        return {row[0]: row[1] for row in cursor.fetchall()}
+    today = datetime.date.today()
+    if not target_date:
+        target_date = today.strftime("%Y-%m-%d")
 
-def get_mouse_heatmap_data() -> Dict[str, int]:
-    init_db()
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT button_name, count FROM mouse_heatmap")
-        return {row[0]: row[1] for row in cursor.fetchall()}
+        if range_type == "day":
+            date_condition = "date_str = ?"
+            params = [target_date]
+        elif range_type == "week":
+            start_date = (today - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        elif range_type == "month":
+            start_date = (today - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        elif range_type == "year":
+            start_date = (today - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        elif range_type == "all_time":
+            date_condition = "1=1"
+            params = []
+        else:
+            date_condition = "date_str = ?"
+            params = [target_date]
+
+        cursor.execute(f"""
+        SELECT key_code, SUM(count) as total_count
+        FROM key_heatmap_v2
+        WHERE {date_condition}
+        GROUP BY key_code
+        """, params)
+        return {row["key_code"]: row["total_count"] for row in cursor.fetchall()}
+
+def get_mouse_heatmap_data(range_type: str = "day", target_date: Optional[str] = None) -> Dict[str, int]:
+    init_db()
+    today = datetime.date.today()
+    if not target_date:
+        target_date = today.strftime("%Y-%m-%d")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if range_type == "day":
+            date_condition = "date_str = ?"
+            params = [target_date]
+        elif range_type == "week":
+            start_date = (today - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        elif range_type == "month":
+            start_date = (today - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        elif range_type == "year":
+            start_date = (today - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        elif range_type == "all_time":
+            date_condition = "1=1"
+            params = []
+        else:
+            date_condition = "date_str = ?"
+            params = [target_date]
+
+        cursor.execute(f"""
+        SELECT button_name, SUM(count) as total_count
+        FROM mouse_heatmap_v2
+        WHERE {date_condition}
+        GROUP BY button_name
+        """, params)
+        return {row["button_name"]: row["total_count"] for row in cursor.fetchall()}
 
 def record_activity_chunk(
     app_id: str,
@@ -762,10 +835,10 @@ def export_data_to_json(file_path: str):
         cursor.execute("SELECT * FROM activity_log WHERE LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '') ORDER BY id ASC")
         logs = [dict(r) for r in cursor.fetchall()]
 
-        cursor.execute("SELECT * FROM key_heatmap")
+        cursor.execute("SELECT key_code, SUM(count) as count FROM key_heatmap_v2 GROUP BY key_code")
         keys = {r["key_code"]: r["count"] for r in cursor.fetchall()}
 
-        cursor.execute("SELECT * FROM mouse_heatmap")
+        cursor.execute("SELECT button_name, SUM(count) as count FROM mouse_heatmap_v2 GROUP BY button_name")
         mouse = {r["button_name"]: r["count"] for r in cursor.fetchall()}
 
         cursor.execute("SELECT * FROM custom_app_rules")

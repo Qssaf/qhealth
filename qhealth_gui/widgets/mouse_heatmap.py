@@ -138,15 +138,23 @@ class MouseHeatmapWidget(QFrame):
         hdr = QHBoxLayout()
         title = QLabel("PHYSICAL MOUSE HEATMAP")
         title.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px;")
-        sub = QLabel("Clicks")
-        sub.setStyleSheet("font-size: 10px; color: #64748b; font-family: monospace;")
+        self.sub_lbl = QLabel("Clicks")
+        self.sub_lbl.setStyleSheet("font-size: 10px; color: #64748b; font-family: monospace;")
         hdr.addWidget(title)
         hdr.addStretch()
-        hdr.addWidget(sub)
+        hdr.addWidget(self.sub_lbl)
         lay.addLayout(hdr)
 
         self.mouse_painter = MousePainter(self)
         lay.addWidget(self.mouse_painter, 1)
 
-    def update_data(self, mouse_counts: Dict[str, int]):
+    def update_data(self, mouse_counts: Dict[str, int], range_type: str = "day"):
+        sub_map = {
+            "day": "Day's clicks",
+            "week": "Last 7 days clicks",
+            "month": "Last 30 days clicks",
+            "year": "This year's clicks",
+            "all_time": "Lifetime clicks"
+        }
+        self.sub_lbl.setText(sub_map.get(range_type, "Clicks"))
         self.mouse_painter.set_data(mouse_counts)

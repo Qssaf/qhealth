@@ -316,10 +316,10 @@ class QHealthMainWindow(QMainWindow):
 
             # Update Input & Heatmap Page (Physical Keyboard, Mouse, Calendar Heatmap, Distribution)
             calendar_heatmap = get_activity_heatmap_data(days=70)
-            key_heatmap = get_keyboard_heatmap_data()
-            mouse_heatmap = get_mouse_heatmap_data()
+            key_heatmap = get_keyboard_heatmap_data(self.current_range, self.selected_date)
+            mouse_heatmap = get_mouse_heatmap_data(self.current_range, self.selected_date)
             self.input_page_widget.update_data(
-                keys, clicks, scrolls, key_heatmap, mouse_heatmap, calendar_heatmap, timeline if self.current_range == "day" else []
+                keys, clicks, scrolls, key_heatmap, mouse_heatmap, calendar_heatmap, timeline, self.current_range
             )
 
             # Update Applications Page (Leaderboard & Active Drilldown)

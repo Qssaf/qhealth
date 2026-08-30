@@ -159,15 +159,23 @@ class KeyboardHeatmapWidget(QFrame):
         hdr = QHBoxLayout()
         title = QLabel("PHYSICAL KEYBOARD HEATMAP")
         title.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px;")
-        sub = QLabel("Live key frequency")
-        sub.setStyleSheet("font-size: 10px; color: #64748b; font-family: monospace;")
+        self.sub_lbl = QLabel("Live key frequency")
+        self.sub_lbl.setStyleSheet("font-size: 10px; color: #64748b; font-family: monospace;")
         hdr.addWidget(title)
         hdr.addStretch()
-        hdr.addWidget(sub)
+        hdr.addWidget(self.sub_lbl)
         lay.addLayout(hdr)
 
         self.keyboard_painter = KeyboardPainter(self)
         lay.addWidget(self.keyboard_painter, 1)
 
-    def update_data(self, key_counts: Dict[int, int]):
+    def update_data(self, key_counts: Dict[int, int], range_type: str = "day"):
+        sub_map = {
+            "day": "Day's key frequency",
+            "week": "Last 7 days key frequency",
+            "month": "Last 30 days key frequency",
+            "year": "This year's key frequency",
+            "all_time": "Lifetime key frequency"
+        }
+        self.sub_lbl.setText(sub_map.get(range_type, "Key frequency"))
         self.keyboard_painter.set_data(key_counts)

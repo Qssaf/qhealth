@@ -1,7 +1,7 @@
 from typing import List, Dict, Any
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import Qt, QRectF, QPoint
 from PyQt6.QtWidgets import (
-    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QStackedWidget, QSizePolicy
+    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QStackedWidget, QToolTip, QSizePolicy
 )
 from PyQt6.QtGui import QPainter, QColor, QFont, QBrush, QLinearGradient
 from ..utils import format_number, format_duration
@@ -9,36 +9,61 @@ from .heatmap_grid import HeatmapGridWidget
 from .keyboard_heatmap import KeyboardHeatmapWidget
 from .mouse_heatmap import MouseHeatmapWidget
 
+INPUT_TITLES = {
+    "day": "24-HOUR INPUT ACTIVITY DISTRIBUTION",
+    "week": "7-DAY INPUT ACTIVITY DISTRIBUTION",
+    "month": "30-DAY INPUT ACTIVITY DISTRIBUTION",
+    "year": "MONTHLY INPUT ACTIVITY DISTRIBUTION",
+    "all_time": "ALL-TIME INPUT DISTRIBUTION"
+}
+
 class HourlyInputBarsPainter(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumHeight(110)
-        self.hourly = []
+        self.timeline = []
+        self.range_type = "day"
+        self.setMouseTracking(True)
+        self.bar_rects = []
 
-    def set_data(self, hourly):
-        self.hourly = hourly
+    def set_data(self, timeline: List[Dict[str, Any]], range_type: str = "day"):
+        self.timeline = timeline
+        self.range_type = range_type
         self.update()
+
+    def mouseMoveEvent(self, event):
+        pos = event.pos()
+        for rect, d, lbl in self.bar_rects:
+            if rect.contains(pos.x(), pos.y()):
+                keys = d.get("keystrokes", 0)
+                clicks = d.get("clicks", 0)
+                tip = f"{lbl}\n⌨ Keys: {format_number(keys)} · 🖱 Clicks: {format_number(clicks)}"
+                QToolTip.showText(event.globalPosition().toPoint(), tip, self)
+                return
+        super().mouseMoveEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
+        self.bar_rects = []
         w = float(self.width())
-        h = float(self.height()) - 20.0
+        h = float(self.height()) - 22.0
 
-        if not self.hourly:
+        if not self.timeline:
             painter.end()
             return
 
-        max_val = max([item.get("keystrokes", 0) + item.get("clicks", 0) for item in self.hourly] + [1])
-        col_w = w / 24.0
-        bar_w = max(4.0, col_w - 4.0)
+        count = len(self.timeline)
+        col_w = w / float(count)
+        bar_w = max(3.0, min(32.0, col_w - 4.0))
 
-        for i in range(24):
-            item = next((x for x in self.hourly if x.get("hour_int") == i), None)
-            keys = item.get("keystrokes", 0) if item else 0
-            clicks = item.get("clicks", 0) if item else 0
+        max_val = max([item.get("keystrokes", 0) + item.get("clicks", 0) for item in self.timeline] + [1])
+
+        for i, item in enumerate(self.timeline):
+            keys = item.get("keystrokes", 0)
+            clicks = item.get("clicks", 0)
             total = keys + clicks
 
             x = i * col_w + (col_w - bar_w) / 2.0
@@ -47,6 +72,15 @@ class HourlyInputBarsPainter(QWidget):
             y = h - bar_h
 
             rect = QRectF(x, y, bar_w, bar_h)
+
+            if self.range_type == "day":
+                lbl_text = f"🕒 {item.get('hour_int', i):02d}:00"
+            elif self.range_type in ("week", "month"):
+                lbl_text = f"📅 {item.get('date', '')} ({item.get('label', '')})"
+            else:
+                lbl_text = f"📅 {item.get('month_str', '')}"
+
+            self.bar_rects.append((rect, item, lbl_text))
 
             if total > 0:
                 grad = QLinearGradient(x, y, x, h)
@@ -57,16 +91,33 @@ class HourlyInputBarsPainter(QWidget):
                 painter.setBrush(QColor(30, 41, 59, 80))
 
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(rect, 3, 3)
+            painter.drawRoundedRect(rect, 3.0, 3.0)
 
         # X-axis labels
         painter.setPen(QColor("#64748b"))
         font = QFont("monospace", 8)
         painter.setFont(font)
-        labels = [(0, "00:00"), (4, "04:00"), (8, "08:00"), (12, "12:00"), (16, "16:00"), (20, "20:00"), (23, "23:00")]
-        for hour, txt in labels:
-            lx = hour * col_w
-            painter.drawText(QRectF(lx - 10, h + 4, 40, 16), Qt.AlignmentFlag.AlignCenter, txt)
+
+        if self.range_type == "day":
+            labels = [(0, "00:00"), (4, "04:00"), (8, "08:00"), (12, "12:00"), (16, "16:00"), (20, "20:00"), (23, "23:00")]
+            for hour, txt in labels:
+                lx = hour * col_w
+                painter.drawText(QRectF(lx - 10, h + 4, 40, 16), Qt.AlignmentFlag.AlignCenter, txt)
+        elif self.range_type == "week":
+            for i, item in enumerate(self.timeline):
+                lx = i * col_w
+                painter.drawText(QRectF(lx - 6, h + 4, col_w + 12, 16), Qt.AlignmentFlag.AlignCenter, item.get("label", ""))
+        elif self.range_type == "month":
+            for i, item in enumerate(self.timeline):
+                if i % 5 == 0 or i == count - 1:
+                    lx = i * col_w
+                    d_str = item.get("date", "")[-2:]
+                    painter.drawText(QRectF(lx - 10, h + 4, 30, 16), Qt.AlignmentFlag.AlignCenter, d_str)
+        else:
+            for i, item in enumerate(self.timeline):
+                lx = i * col_w
+                m_label = item.get("label", item.get("month_str", "")[-2:])
+                painter.drawText(QRectF(lx - 10, h + 4, col_w + 20, 16), Qt.AlignmentFlag.AlignCenter, m_label)
 
         painter.end()
 
@@ -125,7 +176,7 @@ class InputAnalyticsWidget(QWidget):
 
         main_lay.addLayout(cards_lay)
 
-        # 2. View Toggle Bar (Hardware Heatmaps vs Activity History)
+        # 2. View Toggle Bar
         toggle_bar = QHBoxLayout()
         toggle_bar.setSpacing(8)
 
@@ -153,7 +204,7 @@ class InputAnalyticsWidget(QWidget):
         toggle_bar.addStretch()
         main_lay.addLayout(toggle_bar)
 
-        # 3. Stacked View Area (Fills remaining window space with zero scrollbars)
+        # 3. Stacked View Area
         self.view_stack = QStackedWidget()
         self.view_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -188,9 +239,9 @@ class InputAnalyticsWidget(QWidget):
         ch_lay = QVBoxLayout(chart_card)
         ch_lay.setContentsMargins(14, 12, 14, 12)
         ch_lay.setSpacing(6)
-        ch_title = QLabel("HOURLY INPUT ACTIVITY DISTRIBUTION")
-        ch_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px;")
-        ch_lay.addWidget(ch_title)
+        self.ch_title_lbl = QLabel("INPUT ACTIVITY DISTRIBUTION")
+        self.ch_title_lbl.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px;")
+        ch_lay.addWidget(self.ch_title_lbl)
         self.input_bars = HourlyInputBarsPainter(chart_card)
         ch_lay.addWidget(self.input_bars, 1)
         cal_lay.addWidget(chart_card, 5)
@@ -212,12 +263,14 @@ class InputAnalyticsWidget(QWidget):
         key_heatmap: Dict[int, int],
         mouse_heatmap: Dict[str, int],
         calendar_heatmap: List[Dict[str, Any]],
-        hourly: List[Dict[str, Any]]
+        timeline: List[Dict[str, Any]],
+        range_type: str = "day"
     ):
         self.val_keys.setText(format_number(keys))
         self.val_clicks.setText(format_number(clicks))
         self.val_scrolls.setText(format_number(scrolls))
-        self.keyboard_widget.update_data(key_heatmap)
-        self.mouse_widget.update_data(mouse_heatmap)
+        self.keyboard_widget.update_data(key_heatmap, range_type)
+        self.mouse_widget.update_data(mouse_heatmap, range_type)
         self.heatmap_calendar.update_data(calendar_heatmap)
-        self.input_bars.set_data(hourly)
+        self.ch_title_lbl.setText(INPUT_TITLES.get(range_type, "INPUT ACTIVITY DISTRIBUTION"))
+        self.input_bars.set_data(timeline, range_type)

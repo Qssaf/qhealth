@@ -42,8 +42,8 @@ class TestDatabase(unittest.TestCase):
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tables = {row[0] for row in cursor.fetchall()}
         self.assertIn("activity_log", tables)
-        self.assertIn("key_heatmap", tables)
-        self.assertIn("mouse_heatmap", tables)
+        self.assertIn("key_heatmap_v2", tables)
+        self.assertIn("mouse_heatmap_v2", tables)
         self.assertIn("app_settings", tables)
         conn.close()
 
@@ -125,12 +125,16 @@ class TestDatabase(unittest.TestCase):
             {57: 100, 17: 50, 30: 40},
             {"left": 200, "right": 30, "middle": 10}
         )
-        keys = db.get_keyboard_heatmap_data()
-        mouse = db.get_mouse_heatmap_data()
-        self.assertEqual(keys[57], 100)
-        self.assertEqual(keys[17], 50)
-        self.assertEqual(mouse["left"], 200)
-        self.assertEqual(mouse["right"], 30)
+        keys_day = db.get_keyboard_heatmap_data("day")
+        mouse_day = db.get_mouse_heatmap_data("day")
+        self.assertEqual(keys_day[57], 100)
+        self.assertEqual(keys_day[17], 50)
+        self.assertEqual(mouse_day["left"], 200)
+        self.assertEqual(mouse_day["right"], 30)
+
+        # Test week range
+        keys_week = db.get_keyboard_heatmap_data("week")
+        self.assertEqual(keys_week[57], 100)
 
     def test_month_activity_map(self):
         today = datetime.date.today()
