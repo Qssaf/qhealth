@@ -130,8 +130,115 @@ def init_db():
             value TEXT
         )
         """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS app_budgets (
+            app_id TEXT PRIMARY KEY,
+            daily_limit_minutes INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1
+        )
+        """)
         
         conn.commit()
+
+def set_app_budget(app_id: str, daily_limit_minutes: int, enabled: bool = True):
+    init_db()
+    cleaned_id = app_id.lower().strip()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO app_budgets (app_id, daily_limit_minutes, enabled)
+        VALUES (?, ?, ?)
+        ON CONFLICT(app_id) DO UPDATE SET
+            daily_limit_minutes = excluded.daily_limit_minutes,
+            enabled = excluded.enabled
+        """, (cleaned_id, daily_limit_minutes, 1 if enabled else 0))
+        conn.commit()
+
+def get_app_budget(app_id: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    cleaned_id = app_id.lower().strip()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT app_id, daily_limit_minutes, enabled FROM app_budgets WHERE app_id = ?", (cleaned_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+def get_all_app_budgets() -> Dict[str, Dict[str, Any]]:
+    init_db()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT app_id, daily_limit_minutes, enabled FROM app_budgets")
+        return {row["app_id"]: dict(row) for row in cursor.fetchall()}
+
+def get_activity_streak_stats() -> Dict[str, Any]:
+    init_db()
+    today = datetime.date.today()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+        SELECT DISTINCT date_str
+        FROM activity_log
+        WHERE LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
+        ORDER BY date_str DESC
+        """)
+        active_dates = {row["date_str"] for row in cursor.fetchall()}
+
+        cursor.execute(f"""
+        SELECT 
+            COALESCE(SUM(duration_seconds), 0) as total_dur,
+            COALESCE(SUM(keystrokes), 0) as total_keys
+        FROM activity_log
+        WHERE LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
+        """)
+        totals = cursor.fetchone()
+        lifetime_dur = totals["total_dur"]
+        lifetime_keys = totals["total_keys"]
+
+    # Calculate current streak (counting backwards from today or yesterday)
+    current_streak = 0
+    check_date = today
+    # If today has no activity yet, check starting from yesterday
+    if today.strftime("%Y-%m-%d") not in active_dates:
+        check_date = today - datetime.timedelta(days=1)
+
+    while check_date.strftime("%Y-%m-%d") in active_dates:
+        current_streak += 1
+        check_date -= datetime.timedelta(days=1)
+
+    # Longest streak calculation
+    sorted_dates = sorted([datetime.datetime.strptime(d, "%Y-%m-%d").date() for d in active_dates])
+    longest_streak = 0
+    temp_streak = 0
+    prev_date = None
+    for d in sorted_dates:
+        if prev_date is None or d == prev_date + datetime.timedelta(days=1):
+            temp_streak += 1
+        else:
+            temp_streak = 1
+        longest_streak = max(longest_streak, temp_streak)
+        prev_date = d
+
+    longest_streak = max(longest_streak, current_streak)
+
+    # Lifetime Milestones
+    total_hours = lifetime_dur / 3600.0
+    milestones = [
+        {"id": "first_day", "title": "First Steps", "desc": "Tracked first activity", "unlocked": len(active_dates) >= 1},
+        {"id": "streak_3", "title": "Consistency Master", "desc": "3-day streak", "unlocked": longest_streak >= 3},
+        {"id": "streak_7", "title": "Unstoppable", "desc": "7-day streak", "unlocked": longest_streak >= 7},
+        {"id": "keys_10k", "title": "Keyboard Warrior", "desc": "10k physical keystrokes", "unlocked": lifetime_keys >= 10000},
+        {"id": "keys_50k", "title": "Speed Demon", "desc": "50k physical keystrokes", "unlocked": lifetime_keys >= 50000},
+        {"id": "hours_10", "title": "Deep Focus", "desc": "10h active time", "unlocked": total_hours >= 10.0},
+        {"id": "hours_50", "title": "Centurion", "desc": "50h active time", "unlocked": total_hours >= 50.0},
+    ]
+
+    return {
+        "current_streak": current_streak,
+        "longest_streak": longest_streak,
+        "total_active_days": len(active_dates),
+        "milestones": milestones
+    }
 
 def get_setting(key: str, default: str = "") -> str:
     init_db()
@@ -384,13 +491,25 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
         ORDER BY duration DESC
         """, params)
         apps = [dict(row) for row in cursor.fetchall()]
+        budgets = get_all_app_budgets()
 
         for app in apps:
-            info = app_resolver.resolve(app.get("app_id", ""), app.get("app_name", ""))
+            a_id = app.get("app_id", "").lower()
+            info = app_resolver.resolve(a_id, app.get("app_name", ""))
             app["app_name"] = info["display_name"]
             app["category"] = info["category"]
             app["icon"] = info["icon"]
             app["percentage"] = round((app["duration"] / total_duration * 100), 1) if total_duration > 0 else 0.0
+
+            b_info = budgets.get(a_id)
+            if b_info and b_info.get("enabled", 1) and b_info.get("daily_limit_minutes", 0) > 0:
+                limit_mins = b_info["daily_limit_minutes"]
+                limit_secs = limit_mins * 60
+                app["budget_minutes"] = limit_mins
+                app["budget_percentage"] = min(100.0, round((app["duration"] / float(limit_secs)) * 100, 1))
+            else:
+                app["budget_minutes"] = None
+                app["budget_percentage"] = None
 
         # 3. Category Breakdown
         cursor.execute(f"""
@@ -729,6 +848,7 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
     summary["daily_history"] = timeline # backwards-compat alias
     summary["recent_titles"] = recent_titles
     summary["range_type"] = range_type
+    summary["budget"] = get_app_budget(app_id)
 
     return summary
 

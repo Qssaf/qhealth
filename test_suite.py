@@ -155,13 +155,19 @@ class TestDatabase(unittest.TestCase):
         self.assertIn("custom_tool", rules)
         self.assertEqual(rules["custom_tool"]["category"], "Productivity")
 
-        # 2. Focus score calculation
-        stats = db.get_stats_by_range("day")
-        self.assertIn("focus_score", stats)
-        self.assertIn("focus_rating", stats)
-        self.assertTrue(0 <= stats["focus_score"] <= 100)
+        # 2. App budget & limit
+        db.set_app_budget("custom_tool", 60, enabled=True)
+        b_info = db.get_app_budget("custom_tool")
+        self.assertIsNotNone(b_info)
+        self.assertEqual(b_info["daily_limit_minutes"], 60)
 
-        # 3. CSV & JSON export
+        # 3. Streaks & milestones
+        streak_stats = db.get_activity_streak_stats()
+        self.assertIn("current_streak", streak_stats)
+        self.assertIn("longest_streak", streak_stats)
+        self.assertGreaterEqual(len(streak_stats["milestones"]), 5)
+
+        # 4. CSV & JSON export
         csv_path = db.DB_DIR / "export_test.csv"
         json_path = db.DB_DIR / "export_test.json"
         db.export_data_to_csv(str(csv_path), "day")

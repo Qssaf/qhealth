@@ -35,7 +35,6 @@ class MousePainter(QWidget):
         w = float(self.width())
         h = float(self.height())
 
-        # Scale mouse body dynamically to fit widget
         mh = max(130.0, min(h - 16.0, (w - 24.0) * 1.5))
         mw = mh / 1.5
         mx = (w - mw) / 2.0
@@ -48,7 +47,7 @@ class MousePainter(QWidget):
         def get_btn_color(btn_name):
             cnt = self.mouse_counts.get(btn_name, 0)
             if cnt == 0:
-                return QColor("#111827"), QColor("#1f293d"), QColor("#64748b"), cnt
+                return QColor("#0f1523"), QColor("#1e293b"), QColor("#64748b"), cnt
             ratio = cnt / float(max_count)
             if ratio < 0.20:
                 return QColor("#064e3b"), QColor("#047857"), QColor("#a7f3d0"), cnt
@@ -62,8 +61,8 @@ class MousePainter(QWidget):
         # 1. Mouse Body
         body_path = QPainterPath()
         body_rect = QRectF(mx, my, mw, mh)
-        body_path.addRoundedRect(body_rect, mw * 0.32, mw * 0.32)
-        painter.setBrush(QBrush(QColor("#0b101b")))
+        body_path.addRoundedRect(body_rect, mw * 0.35, mw * 0.35)
+        painter.setBrush(QBrush(QColor("#090e18")))
         painter.setPen(QPen(QColor("#1e293b"), 1.8))
         painter.drawPath(body_path)
 
@@ -76,6 +75,11 @@ class MousePainter(QWidget):
         painter.setBrush(QBrush(bg))
         painter.setPen(QPen(border, 1.4))
         painter.drawRoundedRect(left_rect, 12, 12)
+        
+        # 3D Highlight on button
+        painter.setPen(QPen(QColor(255, 255, 255, 30), 1.0))
+        painter.drawLine(int(left_rect.left() + 4), int(left_rect.top() + 1), int(left_rect.right() - 4), int(left_rect.top() + 1))
+
         painter.setPen(text_c)
         painter.setFont(QFont("Inter", max(7, int(mw * 0.07)), QFont.Weight.Bold))
         painter.drawText(left_rect, Qt.AlignmentFlag.AlignCenter, f"LMB\n{format_number(count)}")
@@ -87,6 +91,11 @@ class MousePainter(QWidget):
         painter.setBrush(QBrush(bg))
         painter.setPen(QPen(border, 1.4))
         painter.drawRoundedRect(right_rect, 12, 12)
+
+        # 3D Highlight on button
+        painter.setPen(QPen(QColor(255, 255, 255, 30), 1.0))
+        painter.drawLine(int(right_rect.left() + 4), int(right_rect.top() + 1), int(right_rect.right() - 4), int(right_rect.top() + 1))
+
         painter.setPen(text_c)
         painter.setFont(QFont("Inter", max(7, int(mw * 0.07)), QFont.Weight.Bold))
         painter.drawText(right_rect, Qt.AlignmentFlag.AlignCenter, f"RMB\n{format_number(count)}")

@@ -1,6 +1,8 @@
 import os
 import sys
-from PyQt6.QtCore import Qt
+import json
+from pathlib import Path
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu
@@ -8,9 +10,12 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QIcon, QAction
 
 from .tracker import ActivityTracker
+from .db import toggle_pause_setting, is_paused_setting, get_stats_by_range
 from qhealth_gui.main_window import QHealthMainWindow, create_app_icon
+from qhealth_gui.utils import format_duration, format_number
 
 SOCKET_NAME = "qhealth_single_instance_socket"
+STATE_FILE = Path.home() / ".local" / "share" / "qhealth" / "live_state.json"
 
 class QHealthApp:
     def __init__(self):
@@ -63,20 +68,23 @@ class QHealthApp:
 
     def _setup_tray(self):
         self.tray = QSystemTrayIcon(self.icon, self.app)
-        self.tray.setToolTip("QHealth — Screen Time & Activity Tracker")
+        self.tray.setToolTip("QHealth — Digital Wellbeing & Activity Tracker")
 
-        menu = QMenu()
-        menu.setStyleSheet("""
+        self.tray_menu = QMenu()
+        self.tray_menu.setStyleSheet("""
             QMenu {
-                background-color: #0f172a;
+                background-color: #0d131f;
                 color: #f1f5f9;
                 border: 1px solid rgba(255, 255, 255, 0.15);
                 border-radius: 8px;
                 padding: 4px;
             }
             QMenu::item {
-                padding: 6px 20px;
+                padding: 6px 18px;
                 border-radius: 4px;
+            }
+            QMenu::item:disabled {
+                color: #64748b;
             }
             QMenu::item:selected {
                 background-color: rgba(16, 185, 129, 0.2);
@@ -89,23 +97,70 @@ class QHealthApp:
             }
         """)
 
-        open_action = QAction("Open QHealth", self.app)
+        open_action = QAction("📊 Open QHealth Dashboard", self.app)
         open_action.triggered.connect(self.show_window)
-        menu.addAction(open_action)
+        self.tray_menu.addAction(open_action)
+
+        self.tray_menu.addSeparator()
+
+        # Quick summary stats items (Feature D)
+        self.stats_action = QAction("⏱ Today: 0m", self.app)
+        self.stats_action.setEnabled(False)
+        self.tray_menu.addAction(self.stats_action)
+
+        self.top_app_action = QAction("🏆 Top: —", self.app)
+        self.top_app_action.setEnabled(False)
+        self.tray_menu.addAction(self.top_app_action)
+
+        self.tray_menu.addSeparator()
 
         self.pause_action = QAction("Pause Tracking", self.app)
         self.pause_action.triggered.connect(self._toggle_pause)
-        menu.addAction(self.pause_action)
+        self.tray_menu.addAction(self.pause_action)
 
-        menu.addSeparator()
+        self.tray_menu.addSeparator()
 
         quit_action = QAction("Quit QHealth", self.app)
         quit_action.triggered.connect(self.quit)
-        menu.addAction(quit_action)
+        self.tray_menu.addAction(quit_action)
 
-        self.tray.setContextMenu(menu)
+        self.tray.setContextMenu(self.tray_menu)
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
+
+        # Tray refresh timer
+        self.tray_timer = QTimer(self.app)
+        self.tray_timer.timeout.connect(self._refresh_tray_stats)
+        self.tray_timer.start(3000)
+        self._refresh_tray_stats()
+
+    def _refresh_tray_stats(self):
+        try:
+            stats = get_stats_by_range("day")
+            dur = stats.get("total_duration", 0)
+            dur_str = format_duration(dur)
+            keys = stats.get("total_keystrokes", 0)
+            clicks = stats.get("total_clicks", 0)
+            apps = stats.get("apps", [])
+            top_name = apps[0]["app_name"] if apps else "None"
+            top_pct = apps[0]["percentage"] if apps else 0
+
+            self.stats_action.setText(f"⏱ Today: {dur_str} ({format_number(keys)} keys)")
+            self.top_app_action.setText(f"🏆 Top: {top_name} ({top_pct}%)")
+
+            # Update tooltip
+            paused = is_paused_setting()
+            status_text = "PAUSED" if paused else "TRACKING"
+            tip = (
+                f"QHealth [{status_text}]\n"
+                f"⏱ Today: {dur_str}\n"
+                f"⌨ {format_number(keys)} keys · 🖱 {format_number(clicks)} clicks\n"
+                f"🏆 Top: {top_name} ({top_pct}%)"
+            )
+            self.tray.setToolTip(tip)
+            self.pause_action.setText("Resume Tracking" if paused else "Pause Tracking")
+        except Exception:
+            pass
 
     def _on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -115,10 +170,11 @@ class QHealthApp:
                 self.show_window()
 
     def _toggle_pause(self):
-        is_paused = self.tracker.toggle_pause()
-        self.pause_action.setText("Resume Tracking" if is_paused else "Pause Tracking")
-        self.window.btn_pause.setText("Resume" if is_paused else "Pause")
-        self.window.btn_pause.setChecked(is_paused)
+        new_paused = toggle_pause_setting()
+        self.tracker.paused = new_paused
+        self.pause_action.setText("Resume Tracking" if new_paused else "Pause Tracking")
+        self.window.btn_pause.setText("Resume" if new_paused else "Pause")
+        self.window.btn_pause.setChecked(new_paused)
 
     def show_window(self):
         self.window.show()

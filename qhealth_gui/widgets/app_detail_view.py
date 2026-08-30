@@ -1,10 +1,11 @@
 from typing import Dict, Any, Callable, List, Optional
 from datetime import datetime
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import Qt, QRectF, pyqtSignal
 from PyQt6.QtWidgets import (
-    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolTip, QSizePolicy
+    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QProgressBar, QToolTip, QSizePolicy
 )
 from PyQt6.QtGui import QPainter, QColor, QFont, QBrush, QLinearGradient
+from qhealth_core.db import set_app_budget
 from ..utils import format_duration, format_number, get_app_icon_pixmap
 
 RANGE_LABELS = {
@@ -22,6 +23,17 @@ TREND_TITLES = {
     "year": "MONTHLY USAGE DISTRIBUTION",
     "all_time": "ALL-TIME MONTHLY TREND"
 }
+
+BUDGET_PRESETS = [
+    (0, "No Limit"),
+    (30, "30 Minutes / Day"),
+    (60, "1 Hour / Day"),
+    (90, "1.5 Hours / Day"),
+    (120, "2 Hours / Day"),
+    (180, "3 Hours / Day"),
+    (240, "4 Hours / Day"),
+    (300, "5 Hours / Day")
+]
 
 class AppTrendBarsPainter(QWidget):
     def __init__(self, parent=None):
@@ -141,6 +153,7 @@ class AppDetailView(QWidget):
         super().__init__(parent)
         self.on_back = on_back
         self.current_app_id = ""
+        self._is_updating = False
 
         main_lay = QVBoxLayout(self)
         main_lay.setContentsMargins(0, 0, 0, 0)
@@ -194,7 +207,72 @@ class AppDetailView(QWidget):
 
         main_lay.addWidget(self.hero_card)
 
-        # 3. Stats Row (Keys, Clicks, Active Days)
+        # 3. Daily Usage Budget Card (Feature A)
+        self.budget_card = QFrame()
+        self.budget_card.setProperty("class", "GlassCard")
+        b_lay = QVBoxLayout(self.budget_card)
+        b_lay.setContentsMargins(18, 12, 18, 12)
+        b_lay.setSpacing(8)
+
+        b_top = QHBoxLayout()
+        b_title = QLabel("DAILY TIME LIMIT & GOAL")
+        b_title.setStyleSheet("font-size: 10px; font-weight: 700; color: #94a3b8; letter-spacing: 0.6px;")
+        b_top.addWidget(b_title)
+        b_top.addStretch()
+
+        self.budget_combo = QComboBox()
+        for mins, label in BUDGET_PRESETS:
+            self.budget_combo.addItem(label, mins)
+        self.budget_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.budget_combo.setStyleSheet("""
+            QComboBox {
+                background-color: rgba(30, 41, 59, 0.8);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                border-radius: 6px;
+                padding: 3px 10px;
+                color: #f8fafc;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #0f172a;
+                color: #ffffff;
+                selection-background-color: rgba(16, 185, 129, 0.3);
+            }
+        """)
+        self.budget_combo.currentIndexChanged.connect(self._on_budget_changed)
+        b_top.addWidget(self.budget_combo)
+        b_lay.addLayout(b_top)
+
+        # Progress bar for budget
+        self.budget_progress_box = QVBoxLayout()
+        self.budget_progress_box.setSpacing(3)
+        self.budget_status_lbl = QLabel("No daily limit set")
+        self.budget_status_lbl.setStyleSheet("font-size: 11px; color: #64748b; font-family: monospace;")
+        
+        self.budget_bar = QProgressBar()
+        self.budget_bar.setFixedHeight(6)
+        self.budget_bar.setTextVisible(False)
+        self.budget_bar.setMaximum(100)
+        self.budget_bar.setValue(0)
+        self.budget_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: rgba(30, 41, 59, 0.6);
+                border: none;
+                border-radius: 3px;
+            }
+            QProgressBar::chunk {
+                background-color: #34d399;
+                border-radius: 3px;
+            }
+        """)
+        self.budget_progress_box.addWidget(self.budget_status_lbl)
+        self.budget_progress_box.addWidget(self.budget_bar)
+        b_lay.addLayout(self.budget_progress_box)
+
+        main_lay.addWidget(self.budget_card)
+
+        # 4. Stats Row (Keys, Clicks, Active Days)
         stats_row = QHBoxLayout()
         stats_row.setSpacing(12)
 
@@ -236,7 +314,7 @@ class AppDetailView(QWidget):
 
         main_lay.addLayout(stats_row)
 
-        # 4. Usage Trend
+        # 5. Usage Trend
         trend_card = QFrame()
         trend_card.setProperty("class", "GlassCard")
         tr_lay = QVBoxLayout(trend_card)
@@ -249,7 +327,7 @@ class AppDetailView(QWidget):
         tr_lay.addWidget(self.trend_painter)
         main_lay.addWidget(trend_card)
 
-        # 5. Recent Window Titles
+        # 6. Recent Window Titles
         self.titles_card = QFrame()
         self.titles_card.setProperty("class", "GlassCard")
         self.titles_lay = QVBoxLayout(self.titles_card)
@@ -262,6 +340,12 @@ class AppDetailView(QWidget):
         self.titles_box.setSpacing(4)
         self.titles_lay.addLayout(self.titles_box)
         main_lay.addWidget(self.titles_card)
+
+    def _on_budget_changed(self, idx: int):
+        if self._is_updating or not self.current_app_id:
+            return
+        limit_mins = self.budget_combo.currentData()
+        set_app_budget(self.current_app_id, limit_mins, enabled=(limit_mins > 0))
 
     def set_app_data(self, data: Dict[str, Any], range_type: str = "day"):
         app_name = data.get("display_name", "Unknown")
@@ -283,6 +367,40 @@ class AppDetailView(QWidget):
         self.val_keys.setText(format_number(data.get("total_keystrokes", 0)))
         self.val_clicks.setText(format_number(data.get("total_clicks", 0)))
         self.val_days.setText(f"{data.get('active_days', 0)} days")
+
+        # Update budget section
+        self._is_updating = True
+        budget_info = data.get("budget") or {}
+        limit_mins = budget_info.get("daily_limit_minutes", 0) if budget_info.get("enabled", 1) else 0
+        
+        idx = self.budget_combo.findData(limit_mins)
+        if idx >= 0:
+            self.budget_combo.setCurrentIndex(idx)
+        else:
+            self.budget_combo.setCurrentIndex(0)
+        self._is_updating = False
+
+        if limit_mins > 0:
+            limit_secs = limit_mins * 60
+            pct = min(100, int((dur / float(limit_secs)) * 100))
+            self.budget_bar.setValue(pct)
+            
+            bar_color = "#34d399" if pct < 80 else ("#fbbf24" if pct < 100 else "#f87171")
+            self.budget_bar.setStyleSheet(f"""
+                QProgressBar {{
+                    background-color: rgba(30, 41, 59, 0.6);
+                    border: none;
+                    border-radius: 3px;
+                }}
+                QProgressBar::chunk {{
+                    background-color: {bar_color};
+                    border-radius: 3px;
+                }}
+            """)
+            self.budget_status_lbl.setText(f"Usage today: {format_duration(dur)} / {format_duration(limit_secs)} ({pct}%)")
+        else:
+            self.budget_bar.setValue(0)
+            self.budget_status_lbl.setText("No daily budget set for this app.")
 
         # Trend bars
         self.trend_painter.set_data(data.get("timeline", []), range_type)

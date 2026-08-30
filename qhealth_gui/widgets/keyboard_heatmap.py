@@ -1,7 +1,7 @@
 from typing import Dict, Any, List, Tuple
 from PyQt6.QtCore import Qt, QRectF, QPoint
 from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolTip, QSizePolicy
-from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush
+from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QLinearGradient
 from ..utils import format_number
 
 KEYBOARD_ROWS: List[List[Tuple[int, str, float]]] = [
@@ -73,14 +73,12 @@ class KeyboardPainter(QWidget):
         row_count = 5.0
         gap = max(2.5, min(5.0, w / 200.0))
 
-        # Compute key dimensions that best fill width and height
         avail_w = w - 16.0
         avail_h = h - 16.0
 
         unit_w = (avail_w - (total_units * gap)) / total_units
         unit_h = (avail_h - (row_count * gap)) / row_count
 
-        # Maintain balanced keycap aspect ratio
         key_h = max(20.0, min(unit_h, unit_w * 1.15))
         key_unit_w = (avail_w - (total_units * gap)) / total_units
 
@@ -106,8 +104,8 @@ class KeyboardPainter(QWidget):
 
                 # Compute key color intensity
                 if count == 0:
-                    bg_color = QColor("#111827")
-                    border_color = QColor("#1f293d")
+                    bg_color = QColor("#0f1523")
+                    border_color = QColor("#1e293b")
                     text_color = QColor("#64748b")
                 else:
                     ratio = count / float(max_count)
@@ -128,12 +126,19 @@ class KeyboardPainter(QWidget):
                         border_color = QColor("#6ee7b7")
                         text_color = QColor("#ffffff")
 
-                # Paint Keycap
+                # 1. Paint 3D Keycap Base
                 painter.setBrush(QBrush(bg_color))
                 painter.setPen(QPen(border_color, 1.2))
-                painter.drawRoundedRect(rect, 4.0, 4.0)
+                painter.drawRoundedRect(rect, 4.5, 4.5)
 
-                # Key label
+                # 2. Tactile 3D Bevel (Top light highlight, Bottom shadow)
+                painter.setPen(QPen(QColor(255, 255, 255, 30 if count == 0 else 60), 1.0))
+                painter.drawLine(int(rect.left() + 3), int(rect.top() + 1), int(rect.right() - 3), int(rect.top() + 1))
+
+                painter.setPen(QPen(QColor(0, 0, 0, 75), 1.2))
+                painter.drawLine(int(rect.left() + 3), int(rect.bottom() - 1), int(rect.right() - 3), int(rect.bottom() - 1))
+
+                # 3. Keycap Legend
                 painter.setPen(text_color)
                 f_size = max(7, min(10, int(key_h * 0.28)))
                 font = QFont("Inter", f_size, QFont.Weight.Bold if count > 0 else QFont.Weight.Normal)
