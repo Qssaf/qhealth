@@ -33,7 +33,7 @@ DEFAULT_CATEGORIES = {
     ],
     "Productivity": [
         "obsidian", "notion-app", "notion", "libreoffice", "kwrite",
-        "korganizer", "okular", "calibre", "xournalpp"
+        "korganizer", "okular", "calibre", "xournalpp", "linear", "linear-native"
     ],
     "System": [
         "systemsettings", "org.kde.systemsettings", "dolphin", "org.kde.dolphin",

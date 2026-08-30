@@ -234,12 +234,14 @@ class ActivityTracker:
         kwin_script = """
         function report() {
             var win = workspace.activeWindow;
-            if (win && !win.minimized && !win.hidden && win.normalWindow) {
+            if (win && !win.minimized && !win.popupWindow && !win.specialWindow) {
                 var app = win.desktopFileName || win.resourceClass || win.resourceName || "";
+                var title = win.caption || "";
+                var cls = win.resourceClass || win.resourceName || "";
                 console.log("QHEALTH_FOCUS:" + JSON.stringify({
                     app: app,
-                    title: win.caption || "",
-                    cls: win.resourceClass || ""
+                    title: title,
+                    cls: cls
                 }));
             } else {
                 console.log("QHEALTH_FOCUS:" + JSON.stringify({
@@ -249,8 +251,15 @@ class ActivityTracker:
                 }));
             }
         }
-        workspace.windowActivated.connect(report);
-        workspace.windowRemoved.connect(report);
+        if (workspace.windowActivated) {
+            workspace.windowActivated.connect(report);
+        }
+        if (workspace.activeWindowChanged) {
+            workspace.activeWindowChanged.connect(report);
+        }
+        if (workspace.windowRemoved) {
+            workspace.windowRemoved.connect(report);
+        }
         report();
         """
         script_path = "/tmp/qhealth_kwin.js"
