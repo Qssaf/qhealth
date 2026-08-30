@@ -229,8 +229,8 @@ class ActivityTracker:
             except:
                 pass
 
-    def _kwin_loop(self):
-        """Integrates with KDE Plasma 6 KWin via Scripting and journalctl."""
+    def _inject_kwin_script(self):
+        """Injects or reloads the active focus monitor in KWin."""
         kwin_script = """
         function report() {
             var win = workspace.activeWindow;
@@ -267,10 +267,15 @@ class ActivityTracker:
                 "busctl", "--user", "call", "org.kde.KWin", "/Scripting",
                 "org.kde.kwin.Scripting", "start"
             ], capture_output=True, timeout=5)
-        except Exception as e:
-            print("[QHealth] Warning: Could not inject KWin script directly:", e)
+        except Exception:
+            pass
+
+    def _kwin_loop(self):
+        """Integrates with KDE Plasma 6 KWin via Scripting and journalctl."""
+        self._inject_kwin_script()
 
         while self.running:
+            proc = None
             try:
                 proc = subprocess.Popen(
                     ["journalctl", "--user", "-u", "plasma-kwin_wayland.service", "-f", "-n", "0", "-o", "cat"],
@@ -281,7 +286,6 @@ class ActivityTracker:
                 
                 for line in iter(proc.stdout.readline, ''):
                     if not self.running:
-                        proc.terminate()
                         break
                     if "QHEALTH_FOCUS:" in line or "CHRONOS_FOCUS:" in line:
                         prefix = "QHEALTH_FOCUS:" if "QHEALTH_FOCUS:" in line else "CHRONOS_FOCUS:"
@@ -310,10 +314,22 @@ class ActivityTracker:
                                     self.last_external_title = raw_title
                         except Exception:
                             pass
-            except Exception as e:
+            except Exception:
                 time.sleep(2.0)
+            finally:
+                if proc:
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=1.0)
+                    except Exception:
+                        pass
+                # Re-inject script in case KWin was restarted
+                if self.running:
+                    time.sleep(1.0)
+                    self._inject_kwin_script()
 
     def _flush_chunk(self):
+        now = time.time()
         with self.input_lock:
             keys = self.chunk_keystrokes
             clicks = self.chunk_clicks
@@ -327,16 +343,19 @@ class ActivityTracker:
             self.chunk_key_codes.clear()
             self.chunk_mouse_buttons.clear()
 
+            # Prevent unbounded recent_events growth over long 24/7 runs
+            self.recent_events = [e for e in self.recent_events if now - e[0] <= 12]
+
         with self.window_lock:
             app_info = dict(self.resolved_app_info)
             title = self.current_title
 
-        now = time.time()
         is_afk = (now - self.last_input_time) > IDLE_THRESHOLD_SECONDS
         
-        # Calculate exact elapsed duration instead of hardcoded 5s
-        elapsed = int(round(now - self.last_flush_time))
+        # Calculate exact elapsed duration, capped at 15s to prevent system suspend/wake jumps
+        raw_elapsed = int(round(now - self.last_flush_time))
         self.last_flush_time = now
+        elapsed = min(max(0, raw_elapsed), 15)
         
         is_active = app_info.get("is_active_window", False)
         duration = elapsed if (is_active and not is_afk and not self.paused) else 0

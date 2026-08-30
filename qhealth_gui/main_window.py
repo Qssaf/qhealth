@@ -283,55 +283,61 @@ class QHealthMainWindow(QMainWindow):
         self._poll_db()
 
     def _poll_live(self):
-        metrics = None
-        if STATE_FILE.exists():
-            try:
-                with open(STATE_FILE, "r") as f:
-                    metrics = json.load(f)
-            except Exception:
-                pass
-        
-        if not metrics and self.tracker:
-            metrics = self.tracker.get_live_metrics()
+        try:
+            metrics = None
+            if STATE_FILE.exists():
+                try:
+                    with open(STATE_FILE, "r") as f:
+                        metrics = json.load(f)
+                except Exception:
+                    pass
+            
+            if not metrics and self.tracker:
+                metrics = self.tracker.get_live_metrics()
 
-        if metrics:
-            self.live_widget.update_metrics(metrics)
-            if metrics.get("is_paused") != self.btn_pause.isChecked():
-                self.btn_pause.setChecked(metrics.get("is_paused", False))
-                self.btn_pause.setText("Resume" if metrics.get("is_paused") else "Pause")
+            if metrics:
+                self.live_widget.update_metrics(metrics)
+                if metrics.get("is_paused") != self.btn_pause.isChecked():
+                    self.btn_pause.setChecked(metrics.get("is_paused", False))
+                    self.btn_pause.setText("Resume" if metrics.get("is_paused") else "Pause")
+        except Exception:
+            pass
 
     def _poll_db(self):
-        stats = get_stats_by_range(self.current_range, self.selected_date)
-        total_seconds = stats.get("total_duration", 0)
-        categories = stats.get("categories", [])
-        apps = stats.get("apps", [])
-        timeline = stats.get("timeline", [])
+        try:
+            stats = get_stats_by_range(self.current_range, self.selected_date)
+            total_seconds = stats.get("total_duration", 0)
+            categories = stats.get("categories", [])
+            apps = stats.get("apps", [])
+            timeline = stats.get("timeline", [])
 
-        # Stat cards
-        keys = stats.get("total_keystrokes", 0)
-        clicks = stats.get("total_clicks", 0)
-        scrolls = stats.get("total_scrolls", 0)
-        focus_score = stats.get("focus_score", 100)
-        focus_rating = stats.get("focus_rating", "Deep Work")
-        top_app = apps[0] if apps else None
-        top_name = top_app.get("app_name", "") if top_app else ""
-        top_pct = top_app.get("percentage", 0.0) if top_app else 0.0
+            # Stat cards
+            keys = stats.get("total_keystrokes", 0)
+            clicks = stats.get("total_clicks", 0)
+            scrolls = stats.get("total_scrolls", 0)
+            focus_score = stats.get("focus_score", 100)
+            focus_rating = stats.get("focus_rating", "Deep Work")
+            top_app = apps[0] if apps else None
+            top_name = top_app.get("app_name", "") if top_app else ""
+            top_pct = top_app.get("percentage", 0.0) if top_app else 0.0
 
-        # Update Overview Page
-        self.stat_cards.update_stats(keys, clicks, scrolls, focus_score, focus_rating, top_name, top_pct)
-        self.radial_widget.update_data(total_seconds, categories, self.current_range)
-        self.timeline_widget.update_data(timeline, self.current_range)
+            # Update Overview Page
+            self.stat_cards.update_stats(keys, clicks, scrolls, focus_score, focus_rating, top_name, top_pct)
+            self.radial_widget.update_data(total_seconds, categories, self.current_range)
+            self.timeline_widget.update_data(timeline, self.current_range)
 
-        # Update Input & Heatmap Page (Physical Keyboard, Mouse, Calendar Heatmap, Distribution)
-        calendar_heatmap = get_activity_heatmap_data(days=70)
-        key_heatmap = get_keyboard_heatmap_data()
-        mouse_heatmap = get_mouse_heatmap_data()
-        self.input_page_widget.update_data(
-            keys, clicks, scrolls, key_heatmap, mouse_heatmap, calendar_heatmap, timeline if self.current_range == "day" else []
-        )
+            # Update Input & Heatmap Page (Physical Keyboard, Mouse, Calendar Heatmap, Distribution)
+            calendar_heatmap = get_activity_heatmap_data(days=70)
+            key_heatmap = get_keyboard_heatmap_data()
+            mouse_heatmap = get_mouse_heatmap_data()
+            self.input_page_widget.update_data(
+                keys, clicks, scrolls, key_heatmap, mouse_heatmap, calendar_heatmap, timeline if self.current_range == "day" else []
+            )
 
-        # Update Applications Page (Leaderboard & Active Drilldown)
-        self.apps_leaderboard.update_apps(apps)
-        if self.apps_sub_stack.currentIndex() == 1 and self.active_drilldown_app_id:
-            detail_stats = get_app_detail_stats(self.active_drilldown_app_id, self.current_range, self.selected_date)
-            self.app_detail_view.set_app_data(detail_stats, self.current_range)
+            # Update Applications Page (Leaderboard & Active Drilldown)
+            self.apps_leaderboard.update_apps(apps)
+            if self.apps_sub_stack.currentIndex() == 1 and self.active_drilldown_app_id:
+                detail_stats = get_app_detail_stats(self.active_drilldown_app_id, self.current_range, self.selected_date)
+                self.app_detail_view.set_app_data(detail_stats, self.current_range)
+        except Exception:
+            pass

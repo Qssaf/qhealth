@@ -46,6 +46,7 @@ def get_db():
     DB_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000;")
     try:
         yield conn
     finally:
@@ -64,8 +65,9 @@ def get_category_for_app(app_id: str, app_name: str) -> str:
 def init_db():
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL;")
-        cursor.execute("PRAGMA synchronous=NORMAL;")
+        cursor.execute("PRAGMA journal_mode = WAL;")
+        cursor.execute("PRAGMA synchronous = NORMAL;")
+        cursor.execute("PRAGMA wal_autocheckpoint = 1000;")
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS activity_log (
