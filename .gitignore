@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# QHealth Data & SQLite
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.pid
+*.tmp
+*.sock
+live_state.json
+
+# IDE / Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Build artifacts
+build/
+dist/
+*.spec

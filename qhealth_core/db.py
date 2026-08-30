@@ -1,0 +1,539 @@
+import os
+import sqlite3
+import datetime
+from pathlib import Path
+from typing import Dict, List, Any, Optional
+from contextlib import contextmanager
+from .app_resolver import app_resolver
+
+DB_DIR = Path.home() / ".local" / "share" / "qhealth"
+DB_PATH = DB_DIR / "qhealth.db"
+
+DEFAULT_CATEGORIES = {
+    "Development": [
+        "code", "vscodium", "cursor", "zed", "alacritty", "kitty", "konsole",
+        "wezterm", "nvim", "neovim", "emacs", "idea", "pycharm", "webstorm",
+        "clion", "sublime_text", "ai.opencode.desktop", "opencode", "kate"
+    ],
+    "Gaming": [
+        "steam", "lutris", "heroic", "minecraft", "cs2", "csgo", "dota2",
+        "wine", "gamescope", "retroarch", "dolphin-emu", "osu", "steamwebhelper"
+    ],
+    "Browsing": [
+        "firefox", "google-chrome", "chromium", "brave-browser", "brave",
+        "zen", "zen-browser", "librewolf", "thorium-browser", "opera", "vivaldi"
+    ],
+    "Communication": [
+        "discord", "vesktop", "telegram-desktop", "telegram", "slack",
+        "element", "signal-desktop", "signal", "zapzap", "whatsapp-for-linux", "thunderbird"
+    ],
+    "Media & Design": [
+        "spotify", "vlc", "mpv", "blender", "inkscape", "gimp", "figma-linux",
+        "obs", "com.obsproject.Studio", "davinci-resolve", "kdenlive", "krita"
+    ],
+    "Productivity": [
+        "obsidian", "notion-app", "notion", "libreoffice", "kwrite",
+        "korganizer", "okular", "calibre", "xournalpp"
+    ],
+    "System": [
+        "systemsettings", "org.kde.systemsettings", "dolphin", "org.kde.dolphin",
+        "kcalc", "ark", "htop", "btop", "krunner", "plasma", "qhealth"
+    ]
+}
+
+@contextmanager
+def get_db():
+    DB_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+def get_category_for_app(app_id: str, app_name: str) -> str:
+    app_lower = (app_id or "").lower()
+    name_lower = (app_name or "").lower()
+    
+    for category, keywords in DEFAULT_CATEGORIES.items():
+        for kw in keywords:
+            if kw in app_lower or kw in name_lower:
+                return category
+    return "Other"
+
+def init_db():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS activity_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            date_str TEXT NOT NULL,
+            hour_int INTEGER NOT NULL,
+            app_id TEXT NOT NULL,
+            app_name TEXT NOT NULL,
+            window_title TEXT,
+            category TEXT NOT NULL,
+            duration_seconds INTEGER NOT NULL DEFAULT 0,
+            keystrokes INTEGER NOT NULL DEFAULT 0,
+            clicks INTEGER NOT NULL DEFAULT 0,
+            scrolls INTEGER NOT NULL DEFAULT 0
+        )
+        """)
+        
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_date ON activity_log(date_str)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_app ON activity_log(app_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_category ON activity_log(category)")
+        
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS custom_app_rules (
+            app_id TEXT PRIMARY KEY,
+            display_name TEXT,
+            category TEXT NOT NULL,
+            custom_color TEXT
+        )
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS key_heatmap (
+            key_code INTEGER PRIMARY KEY,
+            count INTEGER NOT NULL DEFAULT 0
+        )
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS mouse_heatmap (
+            button_name TEXT PRIMARY KEY,
+            count INTEGER NOT NULL DEFAULT 0
+        )
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """)
+        
+        conn.commit()
+
+def get_setting(key: str, default: str = "") -> str:
+    init_db()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        return row[0] if row else default
+
+def set_setting(key: str, value: str):
+    init_db()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO app_settings (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = ?
+        """, (key, value, value))
+        conn.commit()
+
+def toggle_pause_setting() -> bool:
+    current = get_setting("paused", "false").lower() == "true"
+    new_state = not current
+    set_setting("paused", "true" if new_state else "false")
+    return new_state
+
+def is_paused_setting() -> bool:
+    return get_setting("paused", "false").lower() == "true"
+
+def record_input_heatmap_chunk(key_counts: Dict[int, int], mouse_counts: Dict[str, int]):
+    if not key_counts and not mouse_counts:
+        return
+
+    init_db()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        for k_code, k_count in key_counts.items():
+            cursor.execute("""
+            INSERT INTO key_heatmap (key_code, count) VALUES (?, ?)
+            ON CONFLICT(key_code) DO UPDATE SET count = count + ?
+            """, (k_code, k_count, k_count))
+
+        for m_btn, m_count in mouse_counts.items():
+            cursor.execute("""
+            INSERT INTO mouse_heatmap (button_name, count) VALUES (?, ?)
+            ON CONFLICT(button_name) DO UPDATE SET count = count + ?
+            """, (m_btn, m_count, m_count))
+
+        conn.commit()
+
+def get_keyboard_heatmap_data() -> Dict[int, int]:
+    init_db()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT key_code, count FROM key_heatmap")
+        return {row[0]: row[1] for row in cursor.fetchall()}
+
+def get_mouse_heatmap_data() -> Dict[str, int]:
+    init_db()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT button_name, count FROM mouse_heatmap")
+        return {row[0]: row[1] for row in cursor.fetchall()}
+
+def record_activity_chunk(
+    app_id: str,
+    app_name: str,
+    window_title: str,
+    duration_seconds: int,
+    keystrokes: int,
+    clicks: int,
+    scrolls: int
+):
+    if duration_seconds <= 0 and keystrokes <= 0 and clicks <= 0:
+        return
+
+    now = datetime.datetime.now()
+    date_str = now.strftime("%Y-%m-%d")
+    hour_int = now.hour
+    category = get_category_for_app(app_id, app_name)
+
+    init_db()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO activity_log (
+            date_str, hour_int, app_id, app_name, window_title,
+            category, duration_seconds, keystrokes, clicks, scrolls
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            date_str, hour_int, app_id, app_name, window_title,
+            category, duration_seconds, keystrokes, clicks, scrolls
+        ))
+        conn.commit()
+
+def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = None) -> Dict[str, Any]:
+    init_db()
+    today = datetime.date.today()
+    if not target_date:
+        target_date = today.strftime("%Y-%m-%d")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        if range_type == "day":
+            date_condition = "date_str = ?"
+            params = [target_date]
+        elif range_type == "week":
+            start_date = (today - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        elif range_type == "month":
+            start_date = (today - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        elif range_type == "year":
+            start_date = (today - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        elif range_type == "all_time":
+            date_condition = "1=1"
+            params = []
+        else:
+            date_condition = "date_str = ?"
+            params = [target_date]
+
+        # 1. Total Summary
+        cursor.execute(f"""
+        SELECT 
+            COALESCE(SUM(duration_seconds), 0) as total_duration,
+            COALESCE(SUM(keystrokes), 0) as total_keystrokes,
+            COALESCE(SUM(clicks), 0) as total_clicks,
+            COALESCE(SUM(scrolls), 0) as total_scrolls
+        FROM activity_log
+        WHERE {date_condition} AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+        """, params)
+        total_row = cursor.fetchone()
+        total_duration = total_row["total_duration"]
+
+        # 2. App Breakdown
+        cursor.execute(f"""
+        SELECT 
+            app_id,
+            app_name,
+            category,
+            SUM(duration_seconds) as duration,
+            SUM(keystrokes) as keystrokes,
+            SUM(clicks) as clicks,
+            SUM(scrolls) as scrolls
+        FROM activity_log
+        WHERE {date_condition} AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+        GROUP BY app_id
+        ORDER BY duration DESC
+        """, params)
+        apps = [dict(row) for row in cursor.fetchall()]
+
+        for app in apps:
+            info = app_resolver.resolve(app.get("app_id", ""), app.get("app_name", ""))
+            app["app_name"] = info["display_name"]
+            app["category"] = info["category"]
+            app["icon"] = info["icon"]
+            app["percentage"] = round((app["duration"] / total_duration * 100), 1) if total_duration > 0 else 0.0
+
+        # 3. Category Breakdown
+        cursor.execute(f"""
+        SELECT 
+            category,
+            SUM(duration_seconds) as duration,
+            SUM(keystrokes) as keystrokes,
+            SUM(clicks) as clicks
+        FROM activity_log
+        WHERE {date_condition} AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+        GROUP BY category
+        ORDER BY duration DESC
+        """, params)
+        categories = [dict(row) for row in cursor.fetchall()]
+        for cat in categories:
+            cat["percentage"] = round((cat["duration"] / total_duration * 100), 1) if total_duration > 0 else 0.0
+
+        # 4. Hourly or Daily Trend Distribution
+        if range_type == "day":
+            cursor.execute("""
+            SELECT 
+                hour_int,
+                SUM(duration_seconds) as duration,
+                SUM(keystrokes) as keystrokes,
+                SUM(clicks) as clicks
+            FROM activity_log
+            WHERE date_str = ? AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+            GROUP BY hour_int
+            ORDER BY hour_int ASC
+            """, (target_date,))
+            hourly_map = {row["hour_int"]: dict(row) for row in cursor.fetchall()}
+            timeline = []
+            for h in range(24):
+                timeline.append(hourly_map.get(h, {"hour_int": h, "duration": 0, "keystrokes": 0, "clicks": 0}))
+        elif range_type in ("week", "month"):
+            num_days = 7 if range_type == "week" else 30
+            cursor.execute(f"""
+            SELECT 
+                date_str,
+                SUM(duration_seconds) as duration,
+                SUM(keystrokes) as keystrokes,
+                SUM(clicks) as clicks
+            FROM activity_log
+            WHERE {date_condition} AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+            GROUP BY date_str
+            ORDER BY date_str ASC
+            """, params)
+            day_map = {row["date_str"]: dict(row) for row in cursor.fetchall()}
+            timeline = []
+            for i in range(num_days - 1, -1, -1):
+                d = (today - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+                d_obj = today - datetime.timedelta(days=i)
+                entry = day_map.get(d, {"duration": 0, "keystrokes": 0, "clicks": 0})
+                timeline.append({
+                    "date": d,
+                    "label": d_obj.strftime("%a") if range_type == "week" else d[-5:],
+                    "duration": entry["duration"],
+                    "keystrokes": entry["keystrokes"],
+                    "clicks": entry["clicks"]
+                })
+        else:
+            cursor.execute(f"""
+            SELECT 
+                SUBSTR(date_str, 1, 7) as month_str,
+                SUM(duration_seconds) as duration,
+                SUM(keystrokes) as keystrokes,
+                SUM(clicks) as clicks
+            FROM activity_log
+            WHERE {date_condition} AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+            GROUP BY month_str
+            ORDER BY month_str ASC
+            """, params)
+            timeline = [dict(row) for row in cursor.fetchall()]
+
+    return {
+        "range_type": range_type,
+        "target_date": target_date,
+        "total_duration": total_duration,
+        "total_keystrokes": total_row["total_keystrokes"],
+        "total_clicks": total_row["total_clicks"],
+        "total_scrolls": total_row["total_scrolls"],
+        "apps": apps,
+        "categories": categories,
+        "timeline": timeline
+    }
+
+def get_activity_heatmap_data(days: int = 70) -> List[Dict[str, Any]]:
+    init_db()
+    today = datetime.date.today()
+    start_date = (today - datetime.timedelta(days=days - 1)).strftime("%Y-%m-%d")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        SELECT 
+            date_str,
+            SUM(duration_seconds) as duration,
+            SUM(keystrokes) as keystrokes,
+            SUM(clicks) as clicks
+        FROM activity_log
+        WHERE date_str >= ? AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+        GROUP BY date_str
+        ORDER BY date_str ASC
+        """, (start_date,))
+        rows = {r["date_str"]: dict(r) for r in cursor.fetchall()}
+
+    max_interactions = 1
+    for r in rows.values():
+        total_act = r["keystrokes"] + r["clicks"]
+        if total_act > max_interactions:
+            max_interactions = total_act
+
+    heatmap = []
+    for i in range(days - 1, -1, -1):
+        d_obj = today - datetime.timedelta(days=i)
+        d_str = d_obj.strftime("%Y-%m-%d")
+        item = rows.get(d_str, {"duration": 0, "keystrokes": 0, "clicks": 0})
+        
+        interactions = item["keystrokes"] + item["clicks"]
+        if interactions == 0 and item["duration"] == 0:
+            level = 0
+        elif interactions < max_interactions * 0.25:
+            level = 1
+        elif interactions < max_interactions * 0.50:
+            level = 2
+        elif interactions < max_interactions * 0.75:
+            level = 3
+        else:
+            level = 4
+
+        heatmap.append({
+            "date": d_str,
+            "day_name": d_obj.strftime("%a"),
+            "weekday": d_obj.weekday(),
+            "duration": item["duration"],
+            "keystrokes": item["keystrokes"],
+            "clicks": item["clicks"],
+            "interactions": interactions,
+            "level": level
+        })
+
+    return heatmap
+
+def get_app_detail_stats(app_id: str) -> Dict[str, Any]:
+    init_db()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        SELECT 
+            app_id,
+            app_name,
+            category,
+            COALESCE(SUM(duration_seconds), 0) as total_duration,
+            COALESCE(SUM(keystrokes), 0) as total_keystrokes,
+            COALESCE(SUM(clicks), 0) as total_clicks,
+            COALESCE(SUM(scrolls), 0) as total_scrolls,
+            COUNT(DISTINCT date_str) as active_days
+        FROM activity_log
+        WHERE (app_id = ? OR app_name = ?)
+        """, (app_id, app_id))
+        summary = dict(cursor.fetchone())
+
+        today = datetime.date.today()
+        start_date = (today - datetime.timedelta(days=13)).strftime("%Y-%m-%d")
+        cursor.execute("""
+        SELECT 
+            date_str,
+            SUM(duration_seconds) as duration,
+            SUM(keystrokes) as keystrokes,
+            SUM(clicks) as clicks
+        FROM activity_log
+        WHERE (app_id = ? OR app_name = ?) AND date_str >= ?
+        GROUP BY date_str
+        ORDER BY date_str ASC
+        """, (app_id, app_id, start_date))
+        day_map = {r["date_str"]: dict(r) for r in cursor.fetchall()}
+        
+        daily_history = []
+        for i in range(13, -1, -1):
+            d_obj = today - datetime.timedelta(days=i)
+            d_str = d_obj.strftime("%Y-%m-%d")
+            entry = day_map.get(d_str, {"duration": 0, "keystrokes": 0, "clicks": 0})
+            daily_history.append({
+                "date": d_str,
+                "day_name": d_obj.strftime("%a"),
+                "duration": entry["duration"],
+                "keystrokes": entry["keystrokes"],
+                "clicks": entry["clicks"]
+            })
+
+        cursor.execute("""
+        SELECT DISTINCT window_title
+        FROM activity_log
+        WHERE (app_id = ? OR app_name = ?) AND window_title IS NOT NULL AND window_title != ''
+        ORDER BY id DESC
+        LIMIT 10
+        """, (app_id, app_id))
+        recent_titles = [r["window_title"] for r in cursor.fetchall()]
+
+    info = app_resolver.resolve(summary.get("app_id", app_id), summary.get("app_name", ""))
+    summary["display_name"] = info["display_name"]
+    summary["icon"] = info["icon"]
+    summary["category"] = info["category"]
+    summary["daily_history"] = daily_history
+    summary["recent_titles"] = recent_titles
+
+    return summary
+
+def get_month_activity_map(year: int, month: int) -> Dict[str, Dict[str, Any]]:
+    init_db()
+    prefix = f"{year:04d}-{month:02d}%"
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        SELECT 
+            date_str,
+            SUM(duration_seconds) as duration,
+            SUM(keystrokes) as keystrokes,
+            SUM(clicks) as clicks
+        FROM activity_log
+        WHERE date_str LIKE ? AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+        GROUP BY date_str
+        """, (prefix,))
+        rows = {r["date_str"]: dict(r) for r in cursor.fetchall()}
+
+    max_dur = max([r["duration"] for r in rows.values()] + [1])
+    result = {}
+    for d_str, item in rows.items():
+        dur = item["duration"]
+        if dur == 0:
+            level = 0
+        elif dur < max_dur * 0.25:
+            level = 1
+        elif dur < max_dur * 0.50:
+            level = 2
+        elif dur < max_dur * 0.75:
+            level = 3
+        else:
+            level = 4
+
+        result[d_str] = {
+            "duration": dur,
+            "keystrokes": item["keystrokes"],
+            "clicks": item["clicks"],
+            "level": level
+        }
+    return result
+
+def get_stats_for_date(date_str: Optional[str] = None) -> Dict[str, Any]:
+    res = get_stats_by_range("day", date_str)
+    res["hourly"] = res.get("timeline", [])
+    res["date"] = res.get("target_date")
+    return res
+
+def get_week_stats() -> List[Dict[str, Any]]:
+    res = get_stats_by_range("week")
+    return res.get("timeline", [])
