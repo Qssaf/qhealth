@@ -423,11 +423,42 @@ def get_activity_heatmap_data(days: int = 70) -> List[Dict[str, Any]]:
 
     return heatmap
 
-def get_app_detail_stats(app_id: str) -> Dict[str, Any]:
+def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Returns specific drilldown metrics, range-adjusted timeline, and recent activity for an application.
+    """
     init_db()
+    today = datetime.date.today()
+    if not target_date:
+        target_date = today.strftime("%Y-%m-%d")
+
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
+
+        if range_type == "day":
+            date_condition = "date_str = ?"
+            params = [target_date]
+        elif range_type == "week":
+            start_date = (today - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        elif range_type == "month":
+            start_date = (today - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        elif range_type == "year":
+            start_date = (today - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        elif range_type == "all_time":
+            date_condition = "1=1"
+            params = []
+        else:
+            date_condition = "date_str = ?"
+            params = [target_date]
+
+        # 1. Summary stats for this app in the selected range
+        summary_query = f"""
         SELECT 
             app_id,
             app_name,
@@ -438,53 +469,96 @@ def get_app_detail_stats(app_id: str) -> Dict[str, Any]:
             COALESCE(SUM(scrolls), 0) as total_scrolls,
             COUNT(DISTINCT date_str) as active_days
         FROM activity_log
-        WHERE (app_id = ? OR app_name = ?)
-        """, (app_id, app_id))
-        summary = dict(cursor.fetchone())
+        WHERE (app_id = ? OR app_name = ?) AND {date_condition}
+        """
+        cursor.execute(summary_query, [app_id, app_id] + params)
+        row = cursor.fetchone()
+        summary = dict(row) if row and row["app_id"] else {
+            "app_id": app_id,
+            "app_name": app_id,
+            "category": "Other",
+            "total_duration": 0,
+            "total_keystrokes": 0,
+            "total_clicks": 0,
+            "total_scrolls": 0,
+            "active_days": 0
+        }
 
-        today = datetime.date.today()
-        start_date = (today - datetime.timedelta(days=13)).strftime("%Y-%m-%d")
-        cursor.execute("""
-        SELECT 
-            date_str,
-            SUM(duration_seconds) as duration,
-            SUM(keystrokes) as keystrokes,
-            SUM(clicks) as clicks
-        FROM activity_log
-        WHERE (app_id = ? OR app_name = ?) AND date_str >= ?
-        GROUP BY date_str
-        ORDER BY date_str ASC
-        """, (app_id, app_id, start_date))
-        day_map = {r["date_str"]: dict(r) for r in cursor.fetchall()}
-        
-        daily_history = []
-        for i in range(13, -1, -1):
-            d_obj = today - datetime.timedelta(days=i)
-            d_str = d_obj.strftime("%Y-%m-%d")
-            entry = day_map.get(d_str, {"duration": 0, "keystrokes": 0, "clicks": 0})
-            daily_history.append({
-                "date": d_str,
-                "day_name": d_obj.strftime("%a"),
-                "duration": entry["duration"],
-                "keystrokes": entry["keystrokes"],
-                "clicks": entry["clicks"]
-            })
+        # 2. Timeline history based on range_type
+        if range_type == "day":
+            cursor.execute("""
+            SELECT 
+                hour_int,
+                SUM(duration_seconds) as duration,
+                SUM(keystrokes) as keystrokes,
+                SUM(clicks) as clicks
+            FROM activity_log
+            WHERE (app_id = ? OR app_name = ?) AND date_str = ?
+            GROUP BY hour_int
+            ORDER BY hour_int ASC
+            """, (app_id, app_id, target_date))
+            hourly_map = {r["hour_int"]: dict(r) for r in cursor.fetchall()}
+            timeline = []
+            for h in range(24):
+                timeline.append(hourly_map.get(h, {"hour_int": h, "duration": 0, "keystrokes": 0, "clicks": 0}))
+        elif range_type in ("week", "month"):
+            num_days = 7 if range_type == "week" else 30
+            cursor.execute(f"""
+            SELECT 
+                date_str,
+                SUM(duration_seconds) as duration,
+                SUM(keystrokes) as keystrokes,
+                SUM(clicks) as clicks
+            FROM activity_log
+            WHERE (app_id = ? OR app_name = ?) AND {date_condition}
+            GROUP BY date_str
+            ORDER BY date_str ASC
+            """, [app_id, app_id] + params)
+            day_map = {r["date_str"]: dict(r) for r in cursor.fetchall()}
+            timeline = []
+            for i in range(num_days - 1, -1, -1):
+                d = (today - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
+                d_obj = today - datetime.timedelta(days=i)
+                entry = day_map.get(d, {"duration": 0, "keystrokes": 0, "clicks": 0})
+                timeline.append({
+                    "date": d,
+                    "label": d_obj.strftime("%a") if range_type == "week" else d[-5:],
+                    "duration": entry["duration"],
+                    "keystrokes": entry["keystrokes"],
+                    "clicks": entry["clicks"]
+                })
+        else:
+            cursor.execute(f"""
+            SELECT 
+                SUBSTR(date_str, 1, 7) as month_str,
+                SUM(duration_seconds) as duration,
+                SUM(keystrokes) as keystrokes,
+                SUM(clicks) as clicks
+            FROM activity_log
+            WHERE (app_id = ? OR app_name = ?) AND {date_condition}
+            GROUP BY month_str
+            ORDER BY month_str ASC
+            """, [app_id, app_id] + params)
+            timeline = [dict(r) for r in cursor.fetchall()]
 
-        cursor.execute("""
+        # 3. Recent distinct window titles for this app in this range
+        cursor.execute(f"""
         SELECT DISTINCT window_title
         FROM activity_log
-        WHERE (app_id = ? OR app_name = ?) AND window_title IS NOT NULL AND window_title != ''
+        WHERE (app_id = ? OR app_name = ?) AND {date_condition} AND window_title IS NOT NULL AND window_title != ''
         ORDER BY id DESC
         LIMIT 10
-        """, (app_id, app_id))
+        """, [app_id, app_id] + params)
         recent_titles = [r["window_title"] for r in cursor.fetchall()]
 
     info = app_resolver.resolve(summary.get("app_id", app_id), summary.get("app_name", ""))
     summary["display_name"] = info["display_name"]
     summary["icon"] = info["icon"]
     summary["category"] = info["category"]
-    summary["daily_history"] = daily_history
+    summary["timeline"] = timeline
+    summary["daily_history"] = timeline # backwards-compat alias
     summary["recent_titles"] = recent_titles
+    summary["range_type"] = range_type
 
     return summary
 

@@ -54,6 +54,7 @@ class QHealthMainWindow(QMainWindow):
         self.tracker = tracker
         self.current_range = "day" # day, week, month, year, all_time
         self.selected_date = datetime.date.today().strftime("%Y-%m-%d")
+        self.active_drilldown_app_id = ""
 
         self.setWindowTitle("QHealth")
         self.resize(1180, 820)
@@ -257,11 +258,13 @@ class QHealthMainWindow(QMainWindow):
 
     def _on_app_selected(self, app_data: dict):
         app_id = app_data.get("app_id", "")
-        detail_stats = get_app_detail_stats(app_id)
-        self.app_detail_view.set_app_data(detail_stats)
+        self.active_drilldown_app_id = app_id
+        detail_stats = get_app_detail_stats(app_id, self.current_range, self.selected_date)
+        self.app_detail_view.set_app_data(detail_stats, self.current_range)
         self.apps_sub_stack.setCurrentIndex(1)
 
     def _on_back_to_apps_list(self):
+        self.active_drilldown_app_id = ""
         self.apps_sub_stack.setCurrentIndex(0)
 
     def _poll_live(self):
@@ -310,5 +313,8 @@ class QHealthMainWindow(QMainWindow):
             keys, clicks, scrolls, key_heatmap, mouse_heatmap, calendar_heatmap, timeline if self.current_range == "day" else []
         )
 
-        # Update Applications Page
+        # Update Applications Page (Leaderboard & Active Drilldown)
         self.apps_leaderboard.update_apps(apps)
+        if self.apps_sub_stack.currentIndex() == 1 and self.active_drilldown_app_id:
+            detail_stats = get_app_detail_stats(self.active_drilldown_app_id, self.current_range, self.selected_date)
+            self.app_detail_view.set_app_data(detail_stats, self.current_range)
