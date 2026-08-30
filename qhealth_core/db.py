@@ -9,6 +9,8 @@ from .app_resolver import app_resolver
 DB_DIR = Path.home() / ".local" / "share" / "qhealth"
 DB_PATH = DB_DIR / "qhealth.db"
 
+EXCLUDED_APP_IDS_SQL = "('desktop', 'desktop / idle', 'idle', 'plasmashell', 'org.kde.plasmashell', 'plasma', 'krunner', '')"
+
 DEFAULT_CATEGORIES = {
     "Development": [
         "code", "vscodium", "cursor", "zed", "alacritty", "kitty", "konsole",
@@ -361,7 +363,7 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
             COALESCE(SUM(clicks), 0) as total_clicks,
             COALESCE(SUM(scrolls), 0) as total_scrolls
         FROM activity_log
-        WHERE {date_condition} AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+        WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         """, params)
         total_row = cursor.fetchone()
         total_duration = total_row["total_duration"]
@@ -377,7 +379,7 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
             SUM(clicks) as clicks,
             SUM(scrolls) as scrolls
         FROM activity_log
-        WHERE {date_condition} AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+        WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         GROUP BY app_id
         ORDER BY duration DESC
         """, params)
@@ -398,7 +400,7 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
             SUM(keystrokes) as keystrokes,
             SUM(clicks) as clicks
         FROM activity_log
-        WHERE {date_condition} AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+        WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         GROUP BY category
         ORDER BY duration DESC
         """, params)
@@ -408,14 +410,14 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
 
         # 4. Hourly or Daily Trend Distribution
         if range_type == "day":
-            cursor.execute("""
+            cursor.execute(f"""
             SELECT 
                 hour_int,
                 SUM(duration_seconds) as duration,
                 SUM(keystrokes) as keystrokes,
                 SUM(clicks) as clicks
             FROM activity_log
-            WHERE date_str = ? AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+            WHERE date_str = ? AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
             GROUP BY hour_int
             ORDER BY hour_int ASC
             """, (target_date,))
@@ -432,7 +434,7 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
                 SUM(keystrokes) as keystrokes,
                 SUM(clicks) as clicks
             FROM activity_log
-            WHERE {date_condition} AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+            WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
             GROUP BY date_str
             ORDER BY date_str ASC
             """, params)
@@ -458,7 +460,7 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
                 SUM(keystrokes) as keystrokes,
                 SUM(clicks) as clicks
             FROM activity_log
-            WHERE {date_condition} AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+            WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
             GROUP BY month_str
             ORDER BY month_str ASC
             """, params)
@@ -522,14 +524,14 @@ def get_activity_heatmap_data(days: int = 70) -> List[Dict[str, Any]]:
 
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
         SELECT 
             date_str,
             SUM(duration_seconds) as duration,
             SUM(keystrokes) as keystrokes,
             SUM(clicks) as clicks
         FROM activity_log
-        WHERE date_str >= ? AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+        WHERE date_str >= ? AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         GROUP BY date_str
         ORDER BY date_str ASC
         """, (start_date,))
@@ -735,14 +737,14 @@ def get_month_activity_map(year: int, month: int) -> Dict[str, Dict[str, Any]]:
     prefix = f"{year:04d}-{month:02d}%"
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
         SELECT 
             date_str,
             SUM(duration_seconds) as duration,
             SUM(keystrokes) as keystrokes,
             SUM(clicks) as clicks
         FROM activity_log
-        WHERE date_str LIKE ? AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+        WHERE date_str LIKE ? AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         GROUP BY date_str
         """, (prefix,))
         rows = {r["date_str"]: dict(r) for r in cursor.fetchall()}
@@ -808,7 +810,7 @@ def export_data_to_csv(file_path: str, range_type: str = "all_time", target_date
             clicks,
             scrolls
         FROM activity_log
-        WHERE {date_condition} AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+        WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         ORDER BY date_str DESC, hour_int DESC
         """, params)
         rows = cursor.fetchall()
@@ -841,7 +843,7 @@ def export_data_to_json(file_path: str):
     init_db()
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM activity_log WHERE LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '') ORDER BY id ASC")
+        cursor.execute(f"SELECT * FROM activity_log WHERE LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL} ORDER BY id ASC")
         logs = [dict(r) for r in cursor.fetchall()]
 
         cursor.execute("SELECT key_code, SUM(count) as count FROM key_heatmap_v2 GROUP BY key_code")

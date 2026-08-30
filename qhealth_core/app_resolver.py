@@ -33,6 +33,13 @@ EXPLICIT_OVERRIDES = {
     "code-oss": {"display_name": "Code OSS", "icon": "code-oss", "category": "Development"},
 }
 
+IDLE_APPS = {
+    "desktop", "desktop / idle", "idle",
+    "plasmashell", "org.kde.plasmashell", "plasma",
+    "krunner", "org.kde.krunner", "kscreenlocker_greet",
+    "org.kde.kscreenlocker_greet", "lockscreen"
+}
+
 class AppInfoResolver:
     _instance = None
 
@@ -99,7 +106,12 @@ class AppInfoResolver:
 
     def resolve(self, raw_app_id: str, raw_title: str = "", raw_class: str = "") -> Dict[str, Any]:
         """Resolves raw window class/id to proper clean name, icon, and category."""
-        if not raw_app_id or raw_app_id.lower() in ("desktop", "desktop / idle", "idle", ""):
+        cleaned_id = raw_app_id.lower().strip() if raw_app_id else ""
+        if cleaned_id.endswith(".desktop"):
+            cleaned_id = cleaned_id[:-8]
+        cleaned_cls = raw_class.lower().strip() if raw_class else ""
+
+        if not cleaned_id or cleaned_id in IDLE_APPS or (cleaned_cls and cleaned_cls in IDLE_APPS):
             return {
                 "app_id": "desktop",
                 "display_name": "Desktop / Idle",
@@ -107,11 +119,6 @@ class AppInfoResolver:
                 "category": "System",
                 "is_active_window": False
             }
-
-        cleaned_id = raw_app_id.lower().strip()
-        if cleaned_id.endswith(".desktop"):
-            cleaned_id = cleaned_id[:-8]
-        cleaned_cls = raw_class.lower().strip() if raw_class else ""
 
         # 1. Custom User Rules from DB (Top Priority)
         try:

@@ -1,9 +1,9 @@
 import math
 from typing import List, Dict, Any
-from PyQt6.QtCore import Qt, QRectF
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame
+from PyQt6.QtCore import Qt, QRectF, QPoint
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QToolTip
 from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QBrush
-from ..utils import format_duration, get_app_color, get_app_icon_pixmap
+from ..utils import format_duration, format_number, get_app_color, get_app_icon_pixmap
 
 class RadialRingPainter(QWidget):
     def __init__(self, parent=None):
@@ -11,11 +11,63 @@ class RadialRingPainter(QWidget):
         self.setMinimumSize(220, 220)
         self.total_seconds = 0
         self.apps: List[Dict[str, Any]] = []
+        self.setMouseTracking(True)
+        self.arc_spans = [] # list of (start_angle_deg, span_deg, app_dict)
 
     def set_data(self, total_seconds: int, apps: List[Dict[str, Any]]):
         self.total_seconds = total_seconds
         self.apps = apps
         self.update()
+
+    def mouseMoveEvent(self, event):
+        pos = event.pos()
+        w = self.width()
+        h = self.height()
+        size = min(w, h) - 24
+        cx = w / 2.0
+        cy = h / 2.0
+        r_mid = size / 2.0
+        stroke_w = 16.0
+
+        dx = pos.x() - cx
+        dy = pos.y() - cy
+        dist = math.sqrt(dx * dx + dy * dy)
+
+        # 1. Check if hovering within ring band
+        if (r_mid - stroke_w / 2.0 - 5.0) <= dist <= (r_mid + stroke_w / 2.0 + 5.0):
+            # Calculate angle in degrees from top (clockwise, 0 = 12 o'clock)
+            angle_rad = math.atan2(dy, dx)
+            deg = math.degrees(angle_rad)
+            angle_from_top = (deg + 90) % 360
+
+            cur_angle = 0.0
+            if self.total_seconds > 0:
+                for app in self.apps[:5]:
+                    dur = app.get("duration", 0)
+                    if dur <= 0:
+                        continue
+                    span_deg = (dur / float(self.total_seconds)) * 360.0
+                    if cur_angle <= angle_from_top <= (cur_angle + span_deg):
+                        app_name = app.get("app_name", "Unknown")
+                        pct = app.get("percentage", 0.0)
+                        keys = app.get("keystrokes", 0)
+                        clicks = app.get("clicks", 0)
+                        tip = (
+                            f"📱 {app_name}\n"
+                            f"⏱ Active: {format_duration(dur)} ({pct}%)\n"
+                            f"⌨ Keys: {format_number(keys)} · 🖱 Clicks: {format_number(clicks)}"
+                        )
+                        QToolTip.showText(event.globalPosition().toPoint(), tip, self)
+                        return
+                    cur_angle += span_deg
+
+        # 2. Check if hovering inside the center circle
+        elif dist < (r_mid - stroke_w / 2.0):
+            tip = f"⏱ Total Screen Time: {format_duration(self.total_seconds)}"
+            QToolTip.showText(event.globalPosition().toPoint(), tip, self)
+            return
+
+        super().mouseMoveEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -57,6 +109,7 @@ class RadialRingPainter(QWidget):
         # Center typography
         painter.setPen(QColor("#f8fafc"))
         font = QFont("Inter", 18, QFont.Weight.Bold)
+        font.setStyleHint(QFont.StyleHint.SansSerif)
         painter.setFont(font)
 
         dur_text = format_duration(self.total_seconds)
@@ -139,7 +192,6 @@ class RadialChartWidget(QFrame):
             icon_name = app.get("icon", app_id)
             dur = app.get("duration", 0)
             pct = app.get("percentage", 0)
-            color = get_app_color(app_name, idx)
 
             row = QFrame()
             row.setProperty("class", "GlassCardInner")
