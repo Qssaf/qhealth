@@ -231,10 +231,10 @@ class TestGUIWidgets(unittest.TestCase):
         self.QHealthMainWindow = QHealthMainWindow
 
     def test_widget_rendering_edge_cases(self):
-        # 1. Radial chart with 0 seconds and with categories
+        # 1. Radial chart with 0 seconds and with apps
         radial = self.RadialChartWidget()
         radial.update_data(0, [])
-        radial.update_data(3600, [{"category": "Development", "duration": 3600, "percentage": 100.0}], "week")
+        radial.update_data(3600, [{"app_name": "OpenCode", "duration": 3600, "percentage": 100.0}], "week")
 
         # 2. Timeline widget across all ranges
         timeline = self.HourlyTimelineWidget()

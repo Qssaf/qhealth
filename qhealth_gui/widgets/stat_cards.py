@@ -1,6 +1,6 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QLabel
-from ..utils import format_number
+from ..utils import format_number, format_duration
 
 class StatCard(QFrame):
     def __init__(self, title: str, accent_color: str, parent=None):
@@ -39,26 +39,22 @@ class StatCardsWidget(QFrame):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(12)
 
-        self.card_keys = StatCard("KEYSTROKES", "#34d399")
-        self.card_clicks = StatCard("CLICKS & SCROLLS", "#22d3ee")
-        self.card_focus = StatCard("FOCUS SCORE", "#a78bfa")
+        self.card_time = StatCard("ACTIVE SCREEN TIME", "#34d399")
+        self.card_keys = StatCard("KEYSTROKES", "#22d3ee")
+        self.card_clicks = StatCard("CLICKS & SCROLLS", "#818cf8")
         self.card_top = StatCard("TOP APP", "#fbbf24")
 
+        lay.addWidget(self.card_time)
         lay.addWidget(self.card_keys)
         lay.addWidget(self.card_clicks)
-        lay.addWidget(self.card_focus)
         lay.addWidget(self.card_top)
 
-    def update_stats(self, keys: int, clicks: int, scrolls: int, focus_score: int, focus_rating: str, top_app_name: str, top_app_pct: float):
+    def update_stats(self, total_seconds: int, keys: int, clicks: int, scrolls: int, top_app_name: str, top_app_pct: float):
+        self.card_time.set_value(format_duration(total_seconds), "Foreground app time")
         self.card_keys.set_value(format_number(keys), "Recorded keypresses")
         self.card_clicks.set_value(f"{format_number(clicks)}", f"{format_number(scrolls)} scrolls")
-        
-        # Focus score badge
-        score_color = "#34d399" if focus_score >= 75 else ("#fbbf24" if focus_score >= 50 else "#f87171")
-        self.card_focus.val_lbl.setStyleSheet(f"font-size: 20px; font-weight: 800; color: {score_color}; font-family: monospace;")
-        self.card_focus.set_value(f"{focus_score}%", f"Rating: {focus_rating}")
 
         if top_app_name:
-            self.card_top.set_value(top_app_name, f"{top_app_pct}% of screen time")
+            self.card_top.set_value(top_app_name, f"{top_app_pct}% of total")
         else:
             self.card_top.set_value("—", "No activity recorded")

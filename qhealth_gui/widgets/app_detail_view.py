@@ -1,17 +1,11 @@
 from typing import Dict, Any, Callable, List, Optional
 from datetime import datetime
-from PyQt6.QtCore import Qt, QRectF, pyqtSignal
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtWidgets import (
-    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QToolTip, QSizePolicy
+    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolTip, QSizePolicy
 )
 from PyQt6.QtGui import QPainter, QColor, QFont, QBrush, QLinearGradient
-from qhealth_core.db import set_custom_app_rule
-from ..utils import format_duration, format_number, get_category_color, get_app_icon_pixmap
-
-CATEGORIES_LIST = [
-    "Development", "Browsing", "Gaming", "Communication",
-    "Media & Design", "Productivity", "System", "Other"
-]
+from ..utils import format_duration, format_number, get_app_icon_pixmap
 
 RANGE_LABELS = {
     "day": "TODAY",
@@ -143,14 +137,10 @@ class AppTrendBarsPainter(QWidget):
 
 
 class AppDetailView(QWidget):
-    categoryChanged = pyqtSignal(str, str)
-
-    def __init__(self, on_back: Callable[[], None], on_category_changed: Optional[Callable[[str, str], None]] = None, parent=None):
+    def __init__(self, on_back: Callable[[], None], parent=None):
         super().__init__(parent)
         self.on_back = on_back
-        self.on_category_changed = on_category_changed
         self.current_app_id = ""
-        self._is_updating = False
 
         main_lay = QVBoxLayout(self)
         main_lay.setContentsMargins(0, 0, 0, 0)
@@ -183,46 +173,11 @@ class AppDetailView(QWidget):
         self.name_lbl = QLabel("Application")
         self.name_lbl.setStyleSheet("font-size: 19px; font-weight: 800; color: #ffffff;")
 
-        sub_row = QHBoxLayout()
-        sub_row.setSpacing(8)
-
-        # Category Selector ComboBox
-        self.cat_combo = QComboBox()
-        self.cat_combo.addItems(CATEGORIES_LIST)
-        self.cat_combo.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.cat_combo.setStyleSheet("""
-            QComboBox {
-                background-color: rgba(16, 185, 129, 0.15);
-                border: 1px solid rgba(16, 185, 129, 0.3);
-                border-radius: 6px;
-                padding: 2px 10px;
-                color: #34d399;
-                font-weight: 700;
-                font-size: 11px;
-                font-family: monospace;
-            }
-            QComboBox::drop-down {
-                border: none;
-                width: 14px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #0f172a;
-                color: #e2e8f0;
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                selection-background-color: rgba(16, 185, 129, 0.25);
-                selection-color: #34d399;
-            }
-        """)
-        self.cat_combo.currentTextChanged.connect(self._on_combo_category_changed)
-
         self.id_lbl = QLabel("app.id")
         self.id_lbl.setStyleSheet("font-size: 11px; color: #64748b; font-family: monospace;")
-        sub_row.addWidget(self.cat_combo)
-        sub_row.addWidget(self.id_lbl)
-        sub_row.addStretch()
 
         title_box.addWidget(self.name_lbl)
-        title_box.addLayout(sub_row)
+        title_box.addWidget(self.id_lbl)
         hero_lay.addLayout(title_box, 1)
 
         # Right total duration badge
@@ -308,34 +263,13 @@ class AppDetailView(QWidget):
         self.titles_lay.addLayout(self.titles_box)
         main_lay.addWidget(self.titles_card)
 
-    def _on_combo_category_changed(self, new_cat: str):
-        if self._is_updating or not self.current_app_id or not new_cat:
-            return
-        set_custom_app_rule(self.current_app_id, new_cat)
-        self.categoryChanged.emit(self.current_app_id, new_cat)
-        if self.on_category_changed:
-            self.on_category_changed(self.current_app_id, new_cat)
-
     def set_app_data(self, data: Dict[str, Any], range_type: str = "day"):
         app_name = data.get("display_name", "Unknown")
         icon_name = data.get("icon", "")
-        category = data.get("category", "Other")
         app_id = data.get("app_id", "")
         self.current_app_id = app_id
 
         self.name_lbl.setText(app_name)
-        
-        # Set combo category without re-triggering signal
-        self._is_updating = True
-        idx = self.cat_combo.findText(category)
-        if idx >= 0:
-            self.cat_combo.setCurrentIndex(idx)
-        else:
-            self.cat_combo.setCurrentText(category)
-        self._is_updating = False
-
-        self.id_lbl.setText(f"({app_id})")
-        self.app_icon.setPixmap(get_app_icon_pixmap(icon_name, app_name, 50))
         self.id_lbl.setText(f"({app_id})")
         self.app_icon.setPixmap(get_app_icon_pixmap(icon_name, app_name, 50))
 

@@ -4,10 +4,10 @@ from PyQt6.QtWidgets import (
     QFrame, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QScrollArea, QWidget, QProgressBar
 )
-from ..utils import format_duration, format_number, get_category_color, get_app_icon_pixmap
+from ..utils import format_duration, format_number, get_app_icon_pixmap, get_app_color
 
 class AppRowWidget(QFrame):
-    def __init__(self, app_data: Dict[str, Any], on_click: Optional[Callable[[Dict[str, Any]], None]] = None, parent=None):
+    def __init__(self, app_data: Dict[str, Any], index: int = 0, on_click: Optional[Callable[[Dict[str, Any]], None]] = None, parent=None):
         super().__init__(parent)
         self.app_data = app_data
         self.on_click = on_click
@@ -28,27 +28,27 @@ class AppRowWidget(QFrame):
         icon_lbl.setPixmap(get_app_icon_pixmap(icon_name, app_name, 36))
         lay.addWidget(icon_lbl)
 
-        # Name and category
+        # App Name & Subtitle
         name_box = QVBoxLayout()
         name_box.setSpacing(2)
         name_lbl = QLabel(app_name)
         name_lbl.setStyleSheet("font-size: 14px; font-weight: 700; color: #ffffff;")
 
-        category = app_data.get("category", "Other")
-        cat_color = get_category_color(category)
-        cat_lbl = QLabel(category)
-        cat_lbl.setStyleSheet(f"font-size: 10px; font-weight: 600; color: {cat_color.name()}; font-family: monospace;")
+        id_lbl = QLabel(app_id if app_id else "application")
+        id_lbl.setStyleSheet("font-size: 10px; color: #64748b; font-family: monospace;")
 
         name_box.addWidget(name_lbl)
-        name_box.addWidget(cat_lbl)
-        lay.addLayout(name_box)
+        name_box.addWidget(id_lbl)
+        lay.addLayout(name_box, 1)
 
         # Progress bar (percentage of screen time)
         pct = app_data.get("percentage", 0.0)
+        app_color = get_app_color(app_name, index)
+
         p_box = QVBoxLayout()
         p_box.setSpacing(2)
         p_top = QHBoxLayout()
-        p_title = QLabel("Share of screen time")
+        p_title = QLabel("Share of active time")
         p_title.setStyleSheet("font-size: 10px; color: #64748b;")
         p_val = QLabel(f"{pct}%")
         p_val.setStyleSheet("font-size: 10px; font-weight: 700; color: #f8fafc; font-family: monospace;")
@@ -68,13 +68,13 @@ class AppRowWidget(QFrame):
                 border-radius: 2px;
             }}
             QProgressBar::chunk {{
-                background-color: {cat_color.name()};
+                background-color: {app_color.name()};
                 border-radius: 2px;
             }}
         """)
         p_box.addLayout(p_top)
         p_box.addWidget(p_bar)
-        lay.addLayout(p_box, 1)
+        lay.addLayout(p_box, 2)
 
         # Stats (Keys, Clicks, Duration)
         stats_box = QHBoxLayout()
@@ -207,19 +207,19 @@ class AppLeaderboardWidget(QFrame):
 
         filtered = [
             a for a in self.apps
-            if not self.search_text or self.search_text in a.get("app_name", "").lower() or self.search_text in a.get("category", "").lower()
+            if not self.search_text or self.search_text in a.get("app_name", "").lower() or self.search_text in a.get("app_id", "").lower()
         ]
 
         filtered.sort(key=lambda x: x.get(self.sort_by, 0), reverse=True)
 
         if not filtered:
-            empty_lbl = QLabel("No application activity recorded yet.")
+            empty_lbl = QLabel("No application activity recorded in this time range.")
             empty_lbl.setStyleSheet("color: #64748b; font-size: 12px; font-style: italic; padding: 30px;")
             empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.scroll_layout.addWidget(empty_lbl)
         else:
-            for app in filtered:
-                row = AppRowWidget(app, on_click=self.on_app_click, parent=self.scroll_content)
+            for idx, app in enumerate(filtered):
+                row = AppRowWidget(app, index=idx, on_click=self.on_app_click, parent=self.scroll_content)
                 self.scroll_layout.addWidget(row)
 
         self.scroll_layout.addStretch()

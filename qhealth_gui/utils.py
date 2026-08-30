@@ -1,18 +1,21 @@
 import os
 import glob
+import hashlib
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QIcon, QPixmap, QPainter, QFont
 
-CATEGORY_COLORS = {
-    "Development": QColor("#10b981"),
-    "Gaming": QColor("#f43f5e"),
-    "Browsing": QColor("#06b6d4"),
-    "Communication": QColor("#6366f1"),
-    "Media & Design": QColor("#f59e0b"),
-    "Productivity": QColor("#14b8a6"),
-    "System": QColor("#64748b"),
-    "Other": QColor("#71717a")
-}
+APP_PALETTE = [
+    QColor("#10b981"), # Emerald
+    QColor("#06b6d4"), # Cyan
+    QColor("#8b5cf6"), # Violet
+    QColor("#f59e0b"), # Amber
+    QColor("#ec4899"), # Pink
+    QColor("#3b82f6"), # Blue
+    QColor("#14b8a6"), # Teal
+    QColor("#f97316"), # Orange
+    QColor("#6366f1"), # Indigo
+    QColor("#84cc16"), # Lime
+]
 
 ICON_SEARCH_DIRS = [
     "/usr/share/icons/hicolor/64x64/apps",
@@ -23,8 +26,15 @@ ICON_SEARCH_DIRS = [
     os.path.expanduser("~/.local/share/icons"),
 ]
 
-def get_category_color(category: str) -> QColor:
-    return CATEGORY_COLORS.get(category, CATEGORY_COLORS["Other"])
+def get_app_color(app_name: str, index: int = 0) -> QColor:
+    """Returns a distinct, consistent vibrant color for an application."""
+    if index < len(APP_PALETTE):
+        return APP_PALETTE[index]
+    h = int(hashlib.md5(app_name.encode('utf-8')).hexdigest(), 16)
+    return APP_PALETTE[h % len(APP_PALETTE)]
+
+def get_category_color(name: str) -> QColor:
+    return get_app_color(name)
 
 def format_duration(seconds: int) -> str:
     if seconds < 60:
@@ -71,14 +81,12 @@ def get_app_icon_pixmap(icon_name: str, app_name: str, size: int = 32) -> QPixma
         if not os.path.exists(d):
             continue
         for cand in candidates:
-            # Check exact candidate filename
             for ext in [".png", ".svg", ".xpm", ""]:
                 exact_path = os.path.join(d, f"{cand}{ext}")
                 if os.path.exists(exact_path):
                     ico = QIcon(exact_path)
                     if not ico.isNull():
                         return ico.pixmap(size, size)
-            # Wildcard search
             matches = glob.glob(os.path.join(d, f"*{cand}*"))
             if matches:
                 ico = QIcon(matches[0])

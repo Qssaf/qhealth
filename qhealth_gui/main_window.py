@@ -125,7 +125,7 @@ class QHealthMainWindow(QMainWindow):
         self.apps_sub_stack.addWidget(self.apps_leaderboard)
 
         # Sub-view 1: Single app drilldown detail view
-        self.app_detail_view = AppDetailView(on_back=self._on_back_to_apps_list, on_category_changed=self._on_app_category_updated, parent=page_apps)
+        self.app_detail_view = AppDetailView(on_back=self._on_back_to_apps_list, parent=page_apps)
         self.apps_sub_stack.addWidget(self.app_detail_view)
 
         apps_lay.addWidget(self.apps_sub_stack)
@@ -267,9 +267,6 @@ class QHealthMainWindow(QMainWindow):
         self.active_drilldown_app_id = ""
         self.apps_sub_stack.setCurrentIndex(0)
 
-    def _on_app_category_updated(self, app_id: str, new_cat: str):
-        self._poll_db()
-
     def _poll_live(self):
         try:
             metrics = None
@@ -309,9 +306,9 @@ class QHealthMainWindow(QMainWindow):
             top_name = top_app.get("app_name", "") if top_app else ""
             top_pct = top_app.get("percentage", 0.0) if top_app else 0.0
 
-            # Update Overview Page
-            self.stat_cards.update_stats(keys, clicks, scrolls, focus_score, focus_rating, top_name, top_pct)
-            self.radial_widget.update_data(total_seconds, categories, self.current_range)
+            # Update Overview Page (Top Applications directly on the Radial Ring and Cards)
+            self.stat_cards.update_stats(total_seconds, keys, clicks, scrolls, top_name, top_pct)
+            self.radial_widget.update_data(total_seconds, apps, self.current_range)
             self.timeline_widget.update_data(timeline, self.current_range)
 
             # Update Input & Heatmap Page (Physical Keyboard, Mouse, Calendar Heatmap, Distribution)
