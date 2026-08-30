@@ -323,19 +323,22 @@ class ActivityTracker:
         is_active = app_info.get("is_active_window", False)
         duration = elapsed if (is_active and not is_afk and not self.paused) else 0
         
-        if duration > 0 or keys > 0 or clicks > 0:
-            record_activity_chunk(
-                app_id=app_info.get("app_id", "unknown"),
-                app_name=app_info.get("display_name", "Unknown App"),
-                window_title=title,
-                duration_seconds=duration,
-                keystrokes=keys,
-                clicks=clicks,
-                scrolls=scrolls
-            )
+        try:
+            if duration > 0 or keys > 0 or clicks > 0:
+                record_activity_chunk(
+                    app_id=app_info.get("app_id", "unknown"),
+                    app_name=app_info.get("display_name", "Unknown App"),
+                    window_title=title,
+                    duration_seconds=duration,
+                    keystrokes=keys,
+                    clicks=clicks,
+                    scrolls=scrolls
+                )
 
-        if key_codes or mouse_btns:
-            record_input_heatmap_chunk(key_codes, mouse_btns)
+            if key_codes or mouse_btns:
+                record_input_heatmap_chunk(key_codes, mouse_btns)
+        except Exception as e:
+            pass
 
     def _aggregator_loop(self):
         while self.running:

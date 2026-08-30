@@ -341,6 +341,7 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
                     "clicks": entry["clicks"]
                 })
         else:
+            # 12-Month slots for Year and All-Time
             cursor.execute(f"""
             SELECT 
                 SUBSTR(date_str, 1, 7) as month_str,
@@ -352,7 +353,26 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
             GROUP BY month_str
             ORDER BY month_str ASC
             """, params)
-            timeline = [dict(row) for row in cursor.fetchall()]
+            month_map = {row["month_str"]: dict(row) for row in cursor.fetchall()}
+            timeline = []
+            cur_year = today.year
+            cur_month = today.month
+            for i in range(11, -1, -1):
+                m_offset = cur_month - i
+                y = cur_year
+                while m_offset <= 0:
+                    m_offset += 12
+                    y -= 1
+                m_str = f"{y:04d}-{m_offset:02d}"
+                d_sample = datetime.date(y, m_offset, 1)
+                entry = month_map.get(m_str, {"duration": 0, "keystrokes": 0, "clicks": 0})
+                timeline.append({
+                    "month_str": m_str,
+                    "label": d_sample.strftime("%b"),
+                    "duration": entry["duration"],
+                    "keystrokes": entry["keystrokes"],
+                    "clicks": entry["clicks"]
+                })
 
     return {
         "range_type": range_type,
@@ -539,7 +559,26 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
             GROUP BY month_str
             ORDER BY month_str ASC
             """, [app_id, app_id] + params)
-            timeline = [dict(r) for r in cursor.fetchall()]
+            month_map = {r["month_str"]: dict(r) for r in cursor.fetchall()}
+            timeline = []
+            cur_year = today.year
+            cur_month = today.month
+            for i in range(11, -1, -1):
+                m_offset = cur_month - i
+                y = cur_year
+                while m_offset <= 0:
+                    m_offset += 12
+                    y -= 1
+                m_str = f"{y:04d}-{m_offset:02d}"
+                d_sample = datetime.date(y, m_offset, 1)
+                entry = month_map.get(m_str, {"duration": 0, "keystrokes": 0, "clicks": 0})
+                timeline.append({
+                    "month_str": m_str,
+                    "label": d_sample.strftime("%b"),
+                    "duration": entry["duration"],
+                    "keystrokes": entry["keystrokes"],
+                    "clicks": entry["clicks"]
+                })
 
         # 3. Recent distinct window titles for this app in this range
         cursor.execute(f"""

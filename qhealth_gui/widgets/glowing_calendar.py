@@ -287,9 +287,20 @@ class GlowingDatePickerBtn(QPushButton):
         popup = GlowingCalendarPopup(self.current_date_str, self)
         popup.dateSelected.connect(self._on_popup_date_selected)
         
-        # Position popup directly below the button
+        # Position popup directly below the button, clamped to screen bounds
         btn_pos = self.mapToGlobal(QPoint(0, self.height() + 4))
-        popup.move(btn_pos)
+        if self.screen():
+            geo = self.screen().availableGeometry()
+            popup_w = 340
+            popup_h = 360
+            x = min(btn_pos.x(), geo.right() - popup_w - 8)
+            x = max(geo.left() + 8, x)
+            y = min(btn_pos.y(), geo.bottom() - popup_h - 8)
+            y = max(geo.top() + 8, y)
+            popup.move(QPoint(x, y))
+        else:
+            popup.move(btn_pos)
+
         popup.exec()
 
     def _on_popup_date_selected(self, date_str: str):

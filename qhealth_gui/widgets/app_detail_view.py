@@ -130,7 +130,8 @@ class AppTrendBarsPainter(QWidget):
         else:
             for i, item in enumerate(self.timeline):
                 lx = i * col_w
-                painter.drawText(QRectF(lx - 10, h + 4, col_w + 20, 16), Qt.AlignmentFlag.AlignCenter, item.get("month_str", "")[-2:])
+                m_label = item.get("label", item.get("month_str", "")[-2:])
+                painter.drawText(QRectF(lx - 10, h + 4, col_w + 20, 16), Qt.AlignmentFlag.AlignCenter, m_label)
 
         painter.end()
 
