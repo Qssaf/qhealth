@@ -1,0 +1,18 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "qhealth@local",
+                "Name": "QHealth"
+            }
+        ],
+        "Category": "Utilities",
+        "Description": "Live screen time and typing speed on your KDE panel",
+        "Icon": "qhealth",
+        "Id": "org.kde.plasma.qhealth",
+        "Name": "QHealth Status",
+        "Version": "2.2",
+        "Website": "https://github.com/Qssaf/qhealth"
+    },
+    "KPackageStructure": "Plasma/Applet"
+}

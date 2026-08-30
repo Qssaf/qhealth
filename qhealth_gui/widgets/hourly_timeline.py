@@ -92,8 +92,8 @@ class TimelineBarsPainter(QWidget):
 
             self.bar_rects.append((rect, item, lbl_text))
 
-            # Color gradient
-            if is_active_highlight:
+            # Color gradient (strictly dark slate if duration is 0)
+            if dur > 0 and is_active_highlight:
                 grad = QLinearGradient(x, y, x, h)
                 grad.setColorAt(0, QColor("#34d399"))
                 grad.setColorAt(1, QColor("#06b6d4"))

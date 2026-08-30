@@ -138,6 +138,31 @@ def set_setting(key: str, value: str):
         """, (key, value, value))
         conn.commit()
 
+def set_custom_app_rule(app_id: str, category: str, display_name: Optional[str] = None):
+    init_db()
+    cleaned_id = app_id.lower().strip()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO custom_app_rules (app_id, display_name, category)
+        VALUES (?, ?, ?)
+        ON CONFLICT(app_id) DO UPDATE SET category = excluded.category
+        """, (cleaned_id, display_name, category))
+
+        # Also update historical records for this app
+        cursor.execute("""
+        UPDATE activity_log SET category = ? WHERE LOWER(app_id) = ? OR LOWER(app_name) = ?
+        """, (category, cleaned_id, cleaned_id))
+
+        conn.commit()
+
+def get_custom_app_rules() -> Dict[str, Dict[str, Any]]:
+    init_db()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT app_id, display_name, category FROM custom_app_rules")
+        return {row["app_id"]: dict(row) for row in cursor.fetchall()}
+
 def toggle_pause_setting() -> bool:
     current = get_setting("paused", "false").lower() == "true"
     new_state = not current
@@ -374,6 +399,24 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
                     "clicks": entry["clicks"]
                 })
 
+        # Calculate Focus & Productivity Score (0-100%)
+        productive_cats = {"Development", "Productivity", "Media & Design"}
+        neutral_cats = {"System", "Other"}
+        prod_secs = sum(c["duration"] for c in categories if c["category"] in productive_cats)
+        neut_secs = sum(c["duration"] for c in categories if c["category"] in neutral_cats)
+        
+        if total_duration > 0:
+            focus_score = int(round(((prod_secs + (neut_secs * 0.5)) / float(total_duration)) * 100))
+        else:
+            focus_score = 100
+
+        if focus_score >= 75:
+            focus_rating = "Deep Work"
+        elif focus_score >= 50:
+            focus_rating = "Balanced"
+        else:
+            focus_rating = "Leisure"
+
     return {
         "range_type": range_type,
         "target_date": target_date,
@@ -381,6 +424,8 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
         "total_keystrokes": total_row["total_keystrokes"],
         "total_clicks": total_row["total_clicks"],
         "total_scrolls": total_row["total_scrolls"],
+        "focus_score": focus_score,
+        "focus_rating": focus_rating,
         "apps": apps,
         "categories": categories,
         "timeline": timeline
@@ -640,6 +685,102 @@ def get_month_activity_map(year: int, month: int) -> Dict[str, Dict[str, Any]]:
             "level": level
         }
     return result
+
+def export_data_to_csv(file_path: str, range_type: str = "all_time", target_date: Optional[str] = None):
+    """Exports activity history to CSV for spreadsheets."""
+    import csv
+    init_db()
+    today = datetime.date.today()
+    if not target_date:
+        target_date = today.strftime("%Y-%m-%d")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        if range_type == "day":
+            date_condition = "date_str = ?"
+            params = [target_date]
+        elif range_type == "week":
+            start_date = (today - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        elif range_type == "month":
+            start_date = (today - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        else:
+            date_condition = "1=1"
+            params = []
+
+        cursor.execute(f"""
+        SELECT 
+            date_str,
+            hour_int,
+            app_name,
+            app_id,
+            category,
+            window_title,
+            duration_seconds,
+            keystrokes,
+            clicks,
+            scrolls
+        FROM activity_log
+        WHERE {date_condition} AND LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '')
+        ORDER BY date_str DESC, hour_int DESC
+        """, params)
+        rows = cursor.fetchall()
+
+    with open(file_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Date", "Hour", "Application", "App ID", "Category", "Window Title", "Duration (Seconds)", "Duration (Formatted)", "Keystrokes", "Clicks", "Scrolls"])
+        for r in rows:
+            dur = r["duration_seconds"]
+            mins = dur // 60
+            secs = dur % 60
+            dur_fmt = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
+            writer.writerow([
+                r["date_str"],
+                f"{r['hour_int']:02d}:00",
+                r["app_name"],
+                r["app_id"],
+                r["category"],
+                r["window_title"] or "",
+                dur,
+                dur_fmt,
+                r["keystrokes"],
+                r["clicks"],
+                r["scrolls"]
+            ])
+
+def export_data_to_json(file_path: str):
+    """Exports full database backup as structured JSON."""
+    import json
+    init_db()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM activity_log WHERE LOWER(app_id) NOT IN ('desktop', 'desktop / idle', 'idle', '') ORDER BY id ASC")
+        logs = [dict(r) for r in cursor.fetchall()]
+
+        cursor.execute("SELECT * FROM key_heatmap")
+        keys = {r["key_code"]: r["count"] for r in cursor.fetchall()}
+
+        cursor.execute("SELECT * FROM mouse_heatmap")
+        mouse = {r["button_name"]: r["count"] for r in cursor.fetchall()}
+
+        cursor.execute("SELECT * FROM custom_app_rules")
+        rules = [dict(r) for r in cursor.fetchall()]
+
+    backup = {
+        "version": "2.2",
+        "exported_at": datetime.datetime.now().isoformat(),
+        "total_records": len(logs),
+        "activity_logs": logs,
+        "key_heatmap": keys,
+        "mouse_heatmap": mouse,
+        "custom_rules": rules
+    }
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(backup, f, indent=2)
 
 def get_stats_for_date(date_str: Optional[str] = None) -> Dict[str, Any]:
     res = get_stats_by_range("day", date_str)

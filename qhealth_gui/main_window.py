@@ -22,6 +22,7 @@ from .widgets.app_leaderboard import AppLeaderboardWidget
 from .widgets.input_analytics import InputAnalyticsWidget
 from .widgets.app_detail_view import AppDetailView
 from .widgets.glowing_calendar import GlowingDatePickerBtn
+from .widgets.export_dialog import ExportDialog
 
 STATE_FILE = Path.home() / ".local" / "share" / "qhealth" / "live_state.json"
 
@@ -125,7 +126,7 @@ class QHealthMainWindow(QMainWindow):
         self.apps_sub_stack.addWidget(self.apps_leaderboard)
 
         # Sub-view 1: Single app drilldown detail view
-        self.app_detail_view = AppDetailView(on_back=self._on_back_to_apps_list, parent=page_apps)
+        self.app_detail_view = AppDetailView(on_back=self._on_back_to_apps_list, on_category_changed=self._on_app_category_updated, parent=page_apps)
         self.apps_sub_stack.addWidget(self.app_detail_view)
 
         apps_lay.addWidget(self.apps_sub_stack)
@@ -222,7 +223,14 @@ class QHealthMainWindow(QMainWindow):
         self.date_btn.dateChanged.connect(self._on_date_changed)
         hdr.addWidget(self.date_btn)
 
-        # 4. Pause / Resume Button
+        # 4. Export Data Button
+        self.btn_export = QPushButton("💾 Export")
+        self.btn_export.setProperty("class", "ActionBtn")
+        self.btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_export.clicked.connect(self._open_export_dialog)
+        hdr.addWidget(self.btn_export)
+
+        # 5. Pause / Resume Button
         self.btn_pause = QPushButton("Pause")
         self.btn_pause.setProperty("class", "ActionBtn")
         self.btn_pause.setCheckable(True)
@@ -230,6 +238,10 @@ class QHealthMainWindow(QMainWindow):
         hdr.addWidget(self.btn_pause)
 
         parent_layout.addLayout(hdr)
+
+    def _open_export_dialog(self):
+        dialog = ExportDialog(self.current_range, self)
+        dialog.exec()
 
     def _switch_main_page(self, index: int):
         self.main_stack.setCurrentIndex(index)
@@ -267,6 +279,9 @@ class QHealthMainWindow(QMainWindow):
         self.active_drilldown_app_id = ""
         self.apps_sub_stack.setCurrentIndex(0)
 
+    def _on_app_category_updated(self, app_id: str, new_cat: str):
+        self._poll_db()
+
     def _poll_live(self):
         metrics = None
         if STATE_FILE.exists():
@@ -296,12 +311,14 @@ class QHealthMainWindow(QMainWindow):
         keys = stats.get("total_keystrokes", 0)
         clicks = stats.get("total_clicks", 0)
         scrolls = stats.get("total_scrolls", 0)
+        focus_score = stats.get("focus_score", 100)
+        focus_rating = stats.get("focus_rating", "Deep Work")
         top_app = apps[0] if apps else None
         top_name = top_app.get("app_name", "") if top_app else ""
         top_pct = top_app.get("percentage", 0.0) if top_app else 0.0
 
         # Update Overview Page
-        self.stat_cards.update_stats(keys, clicks, scrolls, top_name, top_pct)
+        self.stat_cards.update_stats(keys, clicks, scrolls, focus_score, focus_rating, top_name, top_pct)
         self.radial_widget.update_data(total_seconds, categories, self.current_range)
         self.timeline_widget.update_data(timeline, self.current_range)
 

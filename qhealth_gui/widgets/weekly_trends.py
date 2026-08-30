@@ -44,14 +44,17 @@ class WeekBarsPainter(QWidget):
             rect = QRectF(x, y, bar_w, bar_h)
 
             # Paint Bar
-            if is_today:
+            if dur > 0 and is_today:
                 grad = QLinearGradient(x, y, x, h)
                 grad.setColorAt(0, QColor("#34d399"))
                 grad.setColorAt(1, QColor("#06b6d4"))
                 painter.setBrush(QBrush(grad))
                 painter.setPen(Qt.PenStyle.NoPen)
+            elif dur > 0:
+                painter.setBrush(QColor(16, 185, 129, 140))
+                painter.setPen(Qt.PenStyle.NoPen)
             else:
-                painter.setBrush(QColor(51, 65, 85, 180))
+                painter.setBrush(QColor(30, 41, 59, 80))
                 painter.setPen(Qt.PenStyle.NoPen)
 
             painter.drawRoundedRect(rect, 6, 6)

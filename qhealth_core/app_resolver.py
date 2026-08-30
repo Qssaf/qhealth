@@ -113,7 +113,26 @@ class AppInfoResolver:
             cleaned_id = cleaned_id[:-8]
         cleaned_cls = raw_class.lower().strip() if raw_class else ""
 
-        # 1. Explicit overrides
+        # 1. Custom User Rules from DB (Top Priority)
+        try:
+            from .db import get_custom_app_rules
+            user_rules = get_custom_app_rules()
+            if cleaned_id in user_rules or (cleaned_cls and cleaned_cls in user_rules):
+                matched_rule = user_rules.get(cleaned_id) or user_rules.get(cleaned_cls)
+                base_info = self._apps_cache.get(cleaned_id) or self._apps_cache.get(cleaned_cls) or {}
+                icon = base_info.get("icon", cleaned_id)
+                display_name = matched_rule.get("display_name") or base_info.get("display_name", cleaned_id.replace("-", " ").title())
+                return {
+                    "app_id": cleaned_id,
+                    "display_name": display_name,
+                    "icon": icon,
+                    "category": matched_rule["category"],
+                    "is_active_window": True
+                }
+        except Exception:
+            pass
+
+        # 2. Explicit overrides
         if cleaned_id in EXPLICIT_OVERRIDES:
             ov = EXPLICIT_OVERRIDES[cleaned_id]
             return {"app_id": cleaned_id, "display_name": ov["display_name"], "icon": ov["icon"], "category": ov["category"], "is_active_window": True}

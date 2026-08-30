@@ -9,7 +9,7 @@ class StatCard(QFrame):
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 12, 16, 12)
-        lay.setSpacing(4)
+        lay.setSpacing(3)
 
         t_lbl = QLabel(title)
         t_lbl.setStyleSheet("font-size: 10px; font-weight: 700; color: #94a3b8; letter-spacing: 0.8px;")
@@ -17,7 +17,7 @@ class StatCard(QFrame):
         self.val_lbl = QLabel("0")
         self.val_lbl.setStyleSheet(f"font-size: 20px; font-weight: 800; color: {accent_color}; font-family: monospace;")
 
-        self.sub_lbl = QLabel("Today's stats")
+        self.sub_lbl = QLabel("Stats")
         self.sub_lbl.setStyleSheet("font-size: 10px; color: #64748b;")
 
         lay.addWidget(t_lbl)
@@ -40,19 +40,24 @@ class StatCardsWidget(QFrame):
         lay.setSpacing(12)
 
         self.card_keys = StatCard("KEYSTROKES", "#34d399")
-        self.card_clicks = StatCard("CLICKS", "#22d3ee")
-        self.card_scrolls = StatCard("SCROLLS", "#818cf8")
+        self.card_clicks = StatCard("CLICKS & SCROLLS", "#22d3ee")
+        self.card_focus = StatCard("FOCUS SCORE", "#a78bfa")
         self.card_top = StatCard("TOP APP", "#fbbf24")
 
         lay.addWidget(self.card_keys)
         lay.addWidget(self.card_clicks)
-        lay.addWidget(self.card_scrolls)
+        lay.addWidget(self.card_focus)
         lay.addWidget(self.card_top)
 
-    def update_stats(self, keys: int, clicks: int, scrolls: int, top_app_name: str, top_app_pct: float):
-        self.card_keys.set_value(format_number(keys), "Total recorded keypresses")
-        self.card_clicks.set_value(format_number(clicks), "Mouse clicks")
-        self.card_scrolls.set_value(format_number(scrolls), "Scroll interactions")
+    def update_stats(self, keys: int, clicks: int, scrolls: int, focus_score: int, focus_rating: str, top_app_name: str, top_app_pct: float):
+        self.card_keys.set_value(format_number(keys), "Recorded keypresses")
+        self.card_clicks.set_value(f"{format_number(clicks)}", f"{format_number(scrolls)} scrolls")
+        
+        # Focus score badge
+        score_color = "#34d399" if focus_score >= 75 else ("#fbbf24" if focus_score >= 50 else "#f87171")
+        self.card_focus.val_lbl.setStyleSheet(f"font-size: 20px; font-weight: 800; color: {score_color}; font-family: monospace;")
+        self.card_focus.set_value(f"{focus_score}%", f"Rating: {focus_rating}")
+
         if top_app_name:
             self.card_top.set_value(top_app_name, f"{top_app_pct}% of screen time")
         else:

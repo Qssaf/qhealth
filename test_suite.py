@@ -143,6 +143,31 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(month_map[d_str]["clicks"], 300)
         self.assertEqual(month_map[d_str]["level"], 4)
 
+    def test_custom_rule_and_export(self):
+        # 1. Custom app rule
+        db.record_activity_chunk("custom_tool", "Custom Tool", "Editing code", 300, 100, 20, 5)
+        db.set_custom_app_rule("custom_tool", "Productivity")
+        rules = db.get_custom_app_rules()
+        self.assertIn("custom_tool", rules)
+        self.assertEqual(rules["custom_tool"]["category"], "Productivity")
+
+        # 2. Focus score calculation
+        stats = db.get_stats_by_range("day")
+        self.assertIn("focus_score", stats)
+        self.assertIn("focus_rating", stats)
+        self.assertTrue(0 <= stats["focus_score"] <= 100)
+
+        # 3. CSV & JSON export
+        csv_path = db.DB_DIR / "export_test.csv"
+        json_path = db.DB_DIR / "export_test.json"
+        db.export_data_to_csv(str(csv_path), "day")
+        db.export_data_to_json(str(json_path))
+
+        self.assertTrue(csv_path.exists())
+        self.assertTrue(json_path.exists())
+        self.assertGreater(csv_path.stat().st_size, 50)
+        self.assertGreater(json_path.stat().st_size, 50)
+
     def test_settings_ipc(self):
         self.assertFalse(db.is_paused_setting())
         new_state = db.toggle_pause_setting()

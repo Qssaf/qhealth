@@ -5,7 +5,7 @@ import signal
 import sys
 from pathlib import Path
 from .tracker import ActivityTracker
-from .db import init_db, is_paused_setting
+from .db import init_db, is_paused_setting, get_stats_by_range
 
 STATE_DIR = Path.home() / ".local" / "share" / "qhealth"
 STATE_FILE = STATE_DIR / "live_state.json"
@@ -33,13 +33,28 @@ class QHealthDaemon:
 
         print(f"[QHealth Daemon] Running 24/7 background tracking (PID: {os.getpid()})...")
 
+        loop_count = 0
+        today_dur = 0
         try:
             while self.running:
                 # Sync paused state with DB setting
                 self.tracker.paused = is_paused_setting()
 
-                # Update live state file for GUI every 1 second
+                # Refresh today duration every 5 iterations
+                if loop_count % 5 == 0:
+                    try:
+                        stats = get_stats_by_range("day")
+                        today_dur = stats.get("total_duration", 0)
+                    except Exception:
+                        pass
+
+                # Update live state file for GUI & Plasma widget every 1 second
                 metrics = self.tracker.get_live_metrics()
+                metrics["today_duration_seconds"] = today_dur
+                hrs = today_dur // 3600
+                mins = (today_dur % 3600) // 60
+                metrics["today_duration_formatted"] = f"{hrs}h {mins}m" if hrs > 0 else f"{mins}m"
+
                 temp_file = STATE_DIR / "live_state.tmp"
                 try:
                     with open(temp_file, "w") as f:
@@ -47,6 +62,8 @@ class QHealthDaemon:
                     temp_file.replace(STATE_FILE)
                 except Exception:
                     pass
+
+                loop_count += 1
                 time.sleep(1.0)
         finally:
             self.stop()
