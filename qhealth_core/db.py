@@ -82,7 +82,8 @@ def init_db():
             duration_seconds INTEGER NOT NULL DEFAULT 0,
             keystrokes INTEGER NOT NULL DEFAULT 0,
             clicks INTEGER NOT NULL DEFAULT 0,
-            scrolls INTEGER NOT NULL DEFAULT 0
+            scrolls INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(date_str, hour_int, app_id, window_title)
         )
         """)
         
@@ -307,6 +308,14 @@ def record_activity_chunk(
             date_str, hour_int, app_id, app_name, window_title,
             category, duration_seconds, keystrokes, clicks, scrolls
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(date_str, hour_int, app_id, window_title) DO UPDATE SET
+            duration_seconds = duration_seconds + excluded.duration_seconds,
+            keystrokes = keystrokes + excluded.keystrokes,
+            clicks = clicks + excluded.clicks,
+            scrolls = scrolls + excluded.scrolls,
+            app_name = excluded.app_name,
+            category = excluded.category,
+            timestamp = CURRENT_TIMESTAMP
         """, (
             date_str, hour_int, app_id, app_name, window_title,
             category, duration_seconds, keystrokes, clicks, scrolls
