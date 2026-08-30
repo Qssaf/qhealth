@@ -41,6 +41,10 @@ class ActivityTracker:
         self.current_title = ""
         self.current_class = ""
         self.resolved_app_info = app_resolver.resolve("")
+
+        # Last external app (to display in Live card when QHealth is open)
+        self.last_external_app_info = app_resolver.resolve("")
+        self.last_external_title = ""
         self.window_lock = threading.Lock()
         
         # Real-time input stats
@@ -108,8 +112,13 @@ class ActivityTracker:
             idle_state = (now - self.last_input_time) > IDLE_THRESHOLD_SECONDS
 
         with self.window_lock:
-            app_info = dict(self.resolved_app_info)
-            active_title = self.current_title
+            cur_app_id = self.resolved_app_info.get("app_id", "").lower()
+            if cur_app_id == "qhealth" and self.last_external_app_info.get("is_active_window", False):
+                app_info = dict(self.last_external_app_info)
+                active_title = self.last_external_title
+            else:
+                app_info = dict(self.resolved_app_info)
+                active_title = self.current_title
 
         return {
             "active_app": app_info.get("display_name", "Desktop / Idle"),
@@ -283,22 +292,22 @@ class ActivityTracker:
                             raw_title = data.get("title", "")
                             raw_cls = data.get("cls", "")
                             
-                            # Ignore QHealth itself so the previously active application remains retained
+                            resolved = app_resolver.resolve(raw_app, raw_title, raw_cls)
                             is_qhealth = (
                                 "qhealth" in raw_app.lower() or
                                 "qhealth" in raw_cls.lower() or
-                                "qhealth" in raw_title.lower()
+                                "qhealth" in raw_title.lower() or
+                                resolved.get("app_id") == "qhealth"
                             )
-                            if is_qhealth:
-                                continue
-
-                            resolved = app_resolver.resolve(raw_app, raw_title, raw_cls)
                             
                             with self.window_lock:
                                 self.current_raw_app = raw_app
                                 self.current_title = raw_title
                                 self.current_class = raw_cls
                                 self.resolved_app_info = resolved
+                                if not is_qhealth and resolved.get("is_active_window", False):
+                                    self.last_external_app_info = resolved
+                                    self.last_external_title = raw_title
                         except Exception:
                             pass
             except Exception as e:
@@ -329,7 +338,7 @@ class ActivityTracker:
         elapsed = int(round(now - self.last_flush_time))
         self.last_flush_time = now
         
-        is_active = app_info.get("is_active_window", False) and app_info.get("app_id", "").lower() != "qhealth"
+        is_active = app_info.get("is_active_window", False)
         duration = elapsed if (is_active and not is_afk and not self.paused) else 0
         
         try:
