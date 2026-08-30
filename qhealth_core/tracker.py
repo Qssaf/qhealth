@@ -283,6 +283,15 @@ class ActivityTracker:
                             raw_title = data.get("title", "")
                             raw_cls = data.get("cls", "")
                             
+                            # Ignore QHealth itself so the previously active application remains retained
+                            is_qhealth = (
+                                "qhealth" in raw_app.lower() or
+                                "qhealth" in raw_cls.lower() or
+                                "qhealth" in raw_title.lower()
+                            )
+                            if is_qhealth:
+                                continue
+
                             resolved = app_resolver.resolve(raw_app, raw_title, raw_cls)
                             
                             with self.window_lock:
@@ -320,7 +329,7 @@ class ActivityTracker:
         elapsed = int(round(now - self.last_flush_time))
         self.last_flush_time = now
         
-        is_active = app_info.get("is_active_window", False)
+        is_active = app_info.get("is_active_window", False) and app_info.get("app_id", "").lower() != "qhealth"
         duration = elapsed if (is_active and not is_afk and not self.paused) else 0
         
         try:
