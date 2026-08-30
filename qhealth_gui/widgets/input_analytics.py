@@ -135,13 +135,13 @@ class InputAnalyticsWidget(QWidget):
         t_lay.setContentsMargins(3, 2, 3, 2)
         t_lay.setSpacing(4)
 
-        self.btn_view_hardware = QPushButton("⌨️ Keyboard & Mouse Heatmaps")
+        self.btn_view_hardware = QPushButton("⌨️ Keyboard & Mouse")
         self.btn_view_hardware.setProperty("class", "TabBtn")
         self.btn_view_hardware.setCheckable(True)
         self.btn_view_hardware.setChecked(True)
         self.btn_view_hardware.clicked.connect(lambda: self._switch_view(0))
 
-        self.btn_view_calendar = QPushButton("📅 70-Day Matrix & Hourly")
+        self.btn_view_calendar = QPushButton("📅 Activity Matrix")
         self.btn_view_calendar.setProperty("class", "TabBtn")
         self.btn_view_calendar.setCheckable(True)
         self.btn_view_calendar.clicked.connect(lambda: self._switch_view(1))

@@ -22,7 +22,6 @@ from .widgets.app_leaderboard import AppLeaderboardWidget
 from .widgets.input_analytics import InputAnalyticsWidget
 from .widgets.app_detail_view import AppDetailView
 from .widgets.glowing_calendar import GlowingDatePickerBtn
-from .widgets.export_dialog import ExportDialog
 
 STATE_FILE = Path.home() / ".local" / "share" / "qhealth" / "live_state.json"
 
@@ -223,14 +222,7 @@ class QHealthMainWindow(QMainWindow):
         self.date_btn.dateChanged.connect(self._on_date_changed)
         hdr.addWidget(self.date_btn)
 
-        # 4. Export Data Button
-        self.btn_export = QPushButton("💾 Export")
-        self.btn_export.setProperty("class", "ActionBtn")
-        self.btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_export.clicked.connect(self._open_export_dialog)
-        hdr.addWidget(self.btn_export)
-
-        # 5. Pause / Resume Button
+        # 4. Pause / Resume Button
         self.btn_pause = QPushButton("Pause")
         self.btn_pause.setProperty("class", "ActionBtn")
         self.btn_pause.setCheckable(True)
@@ -238,10 +230,6 @@ class QHealthMainWindow(QMainWindow):
         hdr.addWidget(self.btn_pause)
 
         parent_layout.addLayout(hdr)
-
-    def _open_export_dialog(self):
-        dialog = ExportDialog(self.current_range, self)
-        dialog.exec()
 
     def _switch_main_page(self, index: int):
         self.main_stack.setCurrentIndex(index)
