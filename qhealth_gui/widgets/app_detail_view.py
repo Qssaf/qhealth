@@ -346,43 +346,12 @@ class AppDetailView(QWidget):
             return
         limit_mins = self.budget_combo.currentData()
         set_app_budget(self.current_app_id, limit_mins, enabled=(limit_mins > 0))
+        self._update_budget_ui(self._last_duration, limit_mins)
 
-    def set_app_data(self, data: Dict[str, Any], range_type: str = "day"):
-        app_name = data.get("display_name", "Unknown")
-        icon_name = data.get("icon", "")
-        app_id = data.get("app_id", "")
-        self.current_app_id = app_id
-
-        self.name_lbl.setText(app_name)
-        self.id_lbl.setText(f"({app_id})")
-        self.app_icon.setPixmap(get_app_icon_pixmap(icon_name, app_name, 50))
-
-        # Dynamic Range Labels
-        r_tag = RANGE_LABELS.get(range_type, "CUSTOM")
-        self.range_tag_lbl.setText(f"SCREEN TIME ({r_tag})")
-        self.trend_title_lbl.setText(TREND_TITLES.get(range_type, "USAGE TREND"))
-
-        dur = data.get("total_duration", 0)
-        self.total_dur_lbl.setText(format_duration(dur))
-        self.val_keys.setText(format_number(data.get("total_keystrokes", 0)))
-        self.val_clicks.setText(format_number(data.get("total_clicks", 0)))
-        self.val_days.setText(f"{data.get('active_days', 0)} days")
-
-        # Update budget section
-        self._is_updating = True
-        budget_info = data.get("budget") or {}
-        limit_mins = budget_info.get("daily_limit_minutes", 0) if budget_info.get("enabled", 1) else 0
-        
-        idx = self.budget_combo.findData(limit_mins)
-        if idx >= 0:
-            self.budget_combo.setCurrentIndex(idx)
-        else:
-            self.budget_combo.setCurrentIndex(0)
-        self._is_updating = False
-
+    def _update_budget_ui(self, dur: int, limit_mins: int):
         if limit_mins > 0:
             limit_secs = limit_mins * 60
-            pct = min(100, int((dur / float(limit_secs)) * 100))
+            pct = min(100, int((dur / float(limit_secs)) * 100)) if limit_secs > 0 else 0
             self.budget_bar.setValue(pct)
             
             bar_color = "#34d399" if pct < 80 else ("#fbbf24" if pct < 100 else "#f87171")
@@ -401,6 +370,42 @@ class AppDetailView(QWidget):
         else:
             self.budget_bar.setValue(0)
             self.budget_status_lbl.setText("No daily budget set for this app.")
+
+    def set_app_data(self, data: Dict[str, Any], range_type: str = "day"):
+        app_name = data.get("display_name", "Unknown")
+        icon_name = data.get("icon", "")
+        app_id = data.get("app_id", "")
+        self.current_app_id = app_id
+
+        self.name_lbl.setText(app_name)
+        self.id_lbl.setText(f"({app_id})")
+        self.app_icon.setPixmap(get_app_icon_pixmap(icon_name, app_name, 50))
+
+        # Dynamic Range Labels
+        r_tag = RANGE_LABELS.get(range_type, "CUSTOM")
+        self.range_tag_lbl.setText(f"SCREEN TIME ({r_tag})")
+        self.trend_title_lbl.setText(TREND_TITLES.get(range_type, "USAGE TREND"))
+
+        dur = data.get("total_duration", 0)
+        self._last_duration = dur
+        self.total_dur_lbl.setText(format_duration(dur))
+        self.val_keys.setText(format_number(data.get("total_keystrokes", 0)))
+        self.val_clicks.setText(format_number(data.get("total_clicks", 0)))
+        self.val_days.setText(f"{data.get('active_days', 0)} days")
+
+        # Update budget section
+        self._is_updating = True
+        budget_info = data.get("budget") or {}
+        limit_mins = budget_info.get("daily_limit_minutes", 0) if budget_info.get("enabled", 1) else 0
+        
+        idx = self.budget_combo.findData(limit_mins)
+        if idx >= 0:
+            self.budget_combo.setCurrentIndex(idx)
+        else:
+            self.budget_combo.setCurrentIndex(0)
+        self._is_updating = False
+
+        self._update_budget_ui(dur, limit_mins)
 
         # Trend bars
         self.trend_painter.set_data(data.get("timeline", []), range_type)

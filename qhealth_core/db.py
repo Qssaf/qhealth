@@ -179,7 +179,7 @@ def get_activity_streak_stats() -> Dict[str, Any]:
         cursor.execute(f"""
         SELECT DISTINCT date_str
         FROM activity_log
-        WHERE LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
+        WHERE LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL} AND duration_seconds > 0
         ORDER BY date_str DESC
         """)
         active_dates = {row["date_str"] for row in cursor.fetchall()}

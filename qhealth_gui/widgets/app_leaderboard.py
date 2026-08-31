@@ -34,11 +34,24 @@ class AppRowWidget(QFrame):
         name_lbl = QLabel(app_name)
         name_lbl.setStyleSheet("font-size: 14px; font-weight: 700; color: #ffffff;")
 
+        sub_row = QHBoxLayout()
+        sub_row.setSpacing(6)
         id_lbl = QLabel(app_id if app_id else "application")
         id_lbl.setStyleSheet("font-size: 10px; color: #64748b; font-family: monospace;")
+        sub_row.addWidget(id_lbl)
 
+        # Budget Indicator pill if set
+        budget_mins = app_data.get("budget_minutes")
+        if budget_mins:
+            b_pct = app_data.get("budget_percentage", 0)
+            b_color = "#34d399" if b_pct < 80 else ("#fbbf24" if b_pct < 100 else "#f87171")
+            b_lbl = QLabel(f"⏱ {b_pct}% of {budget_mins}m limit")
+            b_lbl.setStyleSheet(f"font-size: 9px; font-weight: 700; color: {b_color}; background-color: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 4px; font-family: monospace;")
+            sub_row.addWidget(b_lbl)
+
+        sub_row.addStretch()
         name_box.addWidget(name_lbl)
-        name_box.addWidget(id_lbl)
+        name_box.addLayout(sub_row)
         lay.addLayout(name_box, 1)
 
         # Progress bar (percentage of screen time)
