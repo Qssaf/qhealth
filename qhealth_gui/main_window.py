@@ -4,7 +4,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, QTimer, QDate
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QStackedWidget, QDateEdit, QFrame, QApplication
+    QPushButton, QStackedWidget, QDateEdit, QFrame, QApplication, QSizePolicy
 )
 from PyQt6.QtGui import QIcon, QKeySequence, QPixmap, QPainter, QColor, QShortcut
 
@@ -179,6 +179,7 @@ class QHealthMainWindow(QMainWindow):
         # 1. Page Switcher Tabs (Overview | Input & Heatmap | Applications)
         pages_box = QFrame()
         pages_box.setProperty("class", "GlassCardInner")
+        pages_box.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         p_lay = QHBoxLayout(pages_box)
         p_lay.setContentsMargins(4, 3, 4, 3)
         p_lay.setSpacing(4)
@@ -187,16 +188,19 @@ class QHealthMainWindow(QMainWindow):
         self.btn_page_overview.setProperty("class", "TabBtn")
         self.btn_page_overview.setCheckable(True)
         self.btn_page_overview.setChecked(True)
+        self.btn_page_overview.setMinimumWidth(75)
         self.btn_page_overview.clicked.connect(lambda: self._switch_main_page(0))
 
         self.btn_page_input = QPushButton("Input & Heatmap")
         self.btn_page_input.setProperty("class", "TabBtn")
         self.btn_page_input.setCheckable(True)
+        self.btn_page_input.setMinimumWidth(130)
         self.btn_page_input.clicked.connect(lambda: self._switch_main_page(1))
 
         self.btn_page_apps = QPushButton("Applications")
         self.btn_page_apps.setProperty("class", "TabBtn")
         self.btn_page_apps.setCheckable(True)
+        self.btn_page_apps.setMinimumWidth(95)
         self.btn_page_apps.clicked.connect(lambda: self._switch_main_page(2))
 
         p_lay.addWidget(self.btn_page_overview)

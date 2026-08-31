@@ -60,7 +60,7 @@ def get_qhealth_stylesheet() -> str:
         color: #94a3b8;
         border: 1px solid transparent;
         border-radius: 8px;
-        padding: 6px 16px;
+        padding: 5px 12px;
         font-weight: 600;
         font-size: 12px;
     }
@@ -83,7 +83,7 @@ def get_qhealth_stylesheet() -> str:
         color: #cbd5e1;
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 8px;
-        padding: 6px 14px;
+        padding: 5px 10px;
         font-weight: 600;
         font-size: 12px;
     }
