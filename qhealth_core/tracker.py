@@ -229,7 +229,7 @@ class ActivityTracker:
             except:
                 pass
 
-    def _inject_kwin_script(self):
+    def _inject_kwin_script(self) -> bool:
         """Injects or reloads the active focus monitor in KWin."""
         kwin_script = """
         function report() {
@@ -267,22 +267,30 @@ class ActivityTracker:
             with open(script_path, "w") as f:
                 f.write(kwin_script)
             
-            subprocess.run([
+            res_load = subprocess.run([
                 "busctl", "--user", "call", "org.kde.KWin", "/Scripting",
                 "org.kde.kwin.Scripting", "loadScript", "s", script_path
             ], capture_output=True, timeout=5)
             
-            subprocess.run([
-                "busctl", "--user", "call", "org.kde.KWin", "/Scripting",
-                "org.kde.kwin.Scripting", "start"
-            ], capture_output=True, timeout=5)
+            if res_load.returncode == 0:
+                subprocess.run([
+                    "busctl", "--user", "call", "org.kde.KWin", "/Scripting",
+                    "org.kde.kwin.Scripting", "start"
+                ], capture_output=True, timeout=5)
+                return True
         except Exception:
             pass
+        return False
 
     def _kwin_loop(self):
-        """Integrates with KDE Plasma 6 KWin via Scripting and journalctl."""
-        self._inject_kwin_script()
+        """Integrates with KDE Plasma 6 KWin via Scripting and journalctl with auto-boot retry."""
+        # Retry injection until KWin is ready on DBus (handles cold PC boot)
+        while self.running:
+            if self._inject_kwin_script():
+                break
+            time.sleep(2.0)
 
+        last_check = time.time()
         while self.running:
             proc = None
             try:
@@ -332,9 +340,8 @@ class ActivityTracker:
                         proc.wait(timeout=1.0)
                     except Exception:
                         pass
-                # Re-inject script in case KWin was restarted
                 if self.running:
-                    time.sleep(1.0)
+                    time.sleep(2.0)
                     self._inject_kwin_script()
 
     def _flush_chunk(self):
