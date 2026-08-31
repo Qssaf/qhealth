@@ -94,8 +94,8 @@ class HourlyInputBarsPainter(QWidget):
             painter.drawRoundedRect(rect, 3.0, 3.0)
 
         # X-axis labels
-        painter.setPen(QColor("#64748b"))
-        font = QFont("monospace", 8)
+        painter.setPen(QColor("#94a3b8"))
+        font = QFont("Inter", 8, QFont.Weight.Medium)
         painter.setFont(font)
 
         if self.range_type == "day":

@@ -106,7 +106,7 @@ class KeyboardPainter(QWidget):
                 if count == 0:
                     bg_color = QColor("#0f1523")
                     border_color = QColor("#1e293b")
-                    text_color = QColor("#64748b")
+                    text_color = QColor("#94a3b8")
                 else:
                     ratio = count / float(max_count)
                     if ratio < 0.20:
@@ -140,8 +140,8 @@ class KeyboardPainter(QWidget):
 
                 # 3. Keycap Legend
                 painter.setPen(text_color)
-                f_size = max(7, min(10, int(key_h * 0.28)))
-                font = QFont("Inter", f_size, QFont.Weight.Bold if count > 0 else QFont.Weight.Normal)
+                f_size = max(9, min(13, int(key_h * 0.38)))
+                font = QFont("Inter", f_size, QFont.Weight.Bold if count > 0 else QFont.Weight.DemiBold)
                 painter.setFont(font)
                 painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
 

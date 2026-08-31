@@ -47,7 +47,7 @@ class MousePainter(QWidget):
         def get_btn_color(btn_name):
             cnt = self.mouse_counts.get(btn_name, 0)
             if cnt == 0:
-                return QColor("#0f1523"), QColor("#1e293b"), QColor("#64748b"), cnt
+                return QColor("#0f1523"), QColor("#1e293b"), QColor("#94a3b8"), cnt
             ratio = cnt / float(max_count)
             if ratio < 0.20:
                 return QColor("#064e3b"), QColor("#047857"), QColor("#a7f3d0"), cnt
@@ -81,7 +81,7 @@ class MousePainter(QWidget):
         painter.drawLine(int(left_rect.left() + 4), int(left_rect.top() + 1), int(left_rect.right() - 4), int(left_rect.top() + 1))
 
         painter.setPen(text_c)
-        painter.setFont(QFont("Inter", max(7, int(mw * 0.07)), QFont.Weight.Bold))
+        painter.setFont(QFont("Inter", max(8, int(mw * 0.08)), QFont.Weight.Bold))
         painter.drawText(left_rect, Qt.AlignmentFlag.AlignCenter, f"LMB\n{format_number(count)}")
 
         # 3. Right Button (RMB)
@@ -97,7 +97,7 @@ class MousePainter(QWidget):
         painter.drawLine(int(right_rect.left() + 4), int(right_rect.top() + 1), int(right_rect.right() - 4), int(right_rect.top() + 1))
 
         painter.setPen(text_c)
-        painter.setFont(QFont("Inter", max(7, int(mw * 0.07)), QFont.Weight.Bold))
+        painter.setFont(QFont("Inter", max(8, int(mw * 0.08)), QFont.Weight.Bold))
         painter.drawText(right_rect, Qt.AlignmentFlag.AlignCenter, f"RMB\n{format_number(count)}")
 
         # 4. Scroll Wheel / Middle Button
