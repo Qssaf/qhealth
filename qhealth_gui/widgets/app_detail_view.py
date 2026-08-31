@@ -36,8 +36,9 @@ BUDGET_PRESETS = [
 ]
 
 class PageRowWidget(QFrame):
-    def __init__(self, group_data: Dict[str, Any], parent=None):
+    def __init__(self, group_data: Dict[str, Any], is_expanded: bool = False, parent_view=None, parent=None):
         super().__init__(parent)
+        self.parent_view = parent_view
         self.setProperty("class", "GlassCardInner")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
@@ -46,7 +47,7 @@ class PageRowWidget(QFrame):
         self.sub_link = group_data.get("sub_link", "")
         self.pages = group_data.get("pages", [])
         self.page_count = group_data.get("page_count", len(self.pages))
-        self.is_expanded = False
+        self.is_expanded = is_expanded
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 12, 14, 12)
@@ -149,7 +150,8 @@ class PageRowWidget(QFrame):
         lay.addLayout(bot_row)
 
         self.sub_container = QWidget()
-        self.sub_container.setVisible(False)
+        self.sub_container.setVisible(self.is_expanded)
+        self.expand_btn.setText("▴" if self.is_expanded else "▾")
         sub_lay = QVBoxLayout(self.sub_container)
         sub_lay.setContentsMargins(12, 8, 4, 4)
         sub_lay.setSpacing(8)
@@ -157,6 +159,7 @@ class PageRowWidget(QFrame):
         for p_info in self.pages:
             p_clean = p_info.get("clean_title", "Unknown Page")
             p_raw = p_info.get("raw_title", p_clean)
+            p_sub = p_info.get("sub_link", "")
             p_dur = p_info.get("duration", 0)
             p_pct = p_info.get("percentage", 0.0)
             p_keys = p_info.get("keystrokes", 0)
@@ -183,7 +186,7 @@ class PageRowWidget(QFrame):
             p_t_lbl = QLabel(f"↳ {p_clean}")
             p_t_lbl.setStyleSheet("color: #e2e8f0; font-size: 12px; font-weight: 600;")
             p_t_lbl.setWordWrap(True)
-            p_t_lbl.setToolTip(p_raw)
+            p_t_lbl.setToolTip(f"Full Window Title:\n{p_raw}")
             p_top.addWidget(p_t_lbl, 1)
 
             p_dur_lbl = QLabel(format_duration(p_dur))
@@ -194,7 +197,12 @@ class PageRowWidget(QFrame):
             p_top.addWidget(p_pct_lbl)
             p_box_lay.addLayout(p_top)
 
-            if p_raw and p_raw != p_clean:
+            if p_sub and p_sub not in ("web", "app", "editor") and p_sub != self.group_name:
+                p_link_lbl = QLabel(f"🔗 {p_sub}")
+                p_link_lbl.setStyleSheet("color: #64748b; font-size: 10px; font-family: monospace;")
+                p_link_lbl.setWordWrap(True)
+                p_box_lay.addWidget(p_link_lbl)
+            elif p_raw and p_raw != p_clean:
                 p_link_lbl = QLabel(p_raw)
                 p_link_lbl.setStyleSheet("color: #64748b; font-size: 10px; font-family: monospace;")
                 p_link_lbl.setWordWrap(True)
@@ -229,6 +237,21 @@ class PageRowWidget(QFrame):
             sub_lay.addWidget(p_box)
 
         lay.addWidget(self.sub_container)
+
+    def mousePressEvent(self, event):
+        self.toggle_expand()
+        super().mousePressEvent(event)
+
+    def toggle_expand(self):
+        self.is_expanded = not self.is_expanded
+        self.sub_container.setVisible(self.is_expanded)
+        self.expand_btn.setText("▴" if self.is_expanded else "▾")
+        if self.parent_view and hasattr(self.parent_view, "expanded_groups"):
+            if self.is_expanded:
+                self.parent_view.expanded_groups.add(self.group_name)
+            else:
+                self.parent_view.expanded_groups.discard(self.group_name)
+        self.updateGeometry()
 
     def mousePressEvent(self, event):
         self.toggle_expand()
@@ -361,6 +384,8 @@ class AppDetailView(QWidget):
         self.current_app_id = ""
         self._last_duration = 0
         self._is_updating = False
+        self.expanded_groups = set()
+        self._prev_app_id = None
 
         root_lay = QVBoxLayout(self)
         root_lay.setContentsMargins(0, 0, 0, 0)
@@ -635,7 +660,18 @@ class AppDetailView(QWidget):
         # Trend bars
         self.trend_painter.set_data(data.get("timeline", []), range_type)
 
-        # Pages / Websites / Channels Breakdown
+        if app_id != self._prev_app_id:
+            self.expanded_groups.clear()
+            self._prev_app_id = app_id
+        else:
+            for i in range(self.pages_box.count()):
+                w = self.pages_box.itemAt(i).widget()
+                if w and hasattr(w, "is_expanded") and hasattr(w, "group_name"):
+                    if w.is_expanded:
+                        self.expanded_groups.add(w.group_name)
+                    else:
+                        self.expanded_groups.discard(w.group_name)
+
         while self.pages_box.count():
             item = self.pages_box.takeAt(0)
             if item.widget():
@@ -650,5 +686,7 @@ class AppDetailView(QWidget):
             self.pages_box.addWidget(lbl)
         else:
             for p in pages:
-                row = PageRowWidget(p, parent=self.pages_card)
+                g_name = p.get("group_name") or p.get("clean_title", "")
+                was_expanded = g_name in self.expanded_groups
+                row = PageRowWidget(p, is_expanded=was_expanded, parent_view=self, parent=self.pages_card)
                 self.pages_box.addWidget(row)

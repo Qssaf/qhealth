@@ -716,30 +716,40 @@ def get_activity_heatmap_data(days: int = 70) -> List[Dict[str, Any]]:
 
     return heatmap
 
-KNOWN_SITES = {
-    "youtube": ("YouTube", "youtube.com", "▶️"),
-    "github": ("GitHub", "github.com", "🐙"),
-    "reddit": ("Reddit", "reddit.com", "🤖"),
-    "chess.com": ("Chess.com", "chess.com", "♟️"),
-    "twitter": ("X / Twitter", "x.com", "🐦"),
-    "x.com": ("X", "x.com", "🐦"),
-    "instagram": ("Instagram", "instagram.com", "📷"),
-    "chatgpt": ("ChatGPT", "chatgpt.com", "🧠"),
-    "wikipedia": ("Wikipedia", "wikipedia.org", "📚"),
-    "twitch": ("Twitch", "twitch.tv", "🟣"),
-    "stackoverflow": ("Stack Overflow", "stackoverflow.com", "💻"),
-    "stackexchange": ("Stack Exchange", "stackexchange.com", "💻"),
-    "google search": ("Google Search", "google.com", "🔍"),
-    "duckduckgo": ("DuckDuckGo", "duckduckgo.com", "🦆"),
-    "whatsapp": ("WhatsApp Web", "web.whatsapp.com", "💬"),
-    "notion": ("Notion", "notion.so", "📝"),
-    "figma": ("Figma", "figma.com", "🎨"),
-    "spotify": ("Spotify", "open.spotify.com", "🎵"),
-    "gitlab": ("GitLab", "gitlab.com", "🦊"),
-    "archwiki": ("ArchWiki", "wiki.archlinux.org", "🐧"),
-    "arch wiki": ("ArchWiki", "wiki.archlinux.org", "🐧"),
-    "kernel.org": ("Kernel Docs", "kernel.org", "🐧"),
-    "opencode": ("OpenCode", "opencode.ai", "⚡"),
+KNOWN_DOMAINS_MAP = {
+    "youtube": ("youtube.com", "▶️"),
+    "youtu.be": ("youtube.com", "▶️"),
+    "github": ("github.com", "🐙"),
+    "reddit": ("reddit.com", "🤖"),
+    "chess.com": ("chess.com", "♟️"),
+    "chess": ("chess.com", "♟️"),
+    "twitter": ("x.com", "🐦"),
+    "x.com": ("x.com", "🐦"),
+    "instagram": ("instagram.com", "📷"),
+    "chatgpt": ("chatgpt.com", "🧠"),
+    "openai": ("openai.com", "🧠"),
+    "wikipedia": ("wikipedia.org", "📚"),
+    "twitch": ("twitch.tv", "🟣"),
+    "stackoverflow": ("stackoverflow.com", "💻"),
+    "stackexchange": ("stackexchange.com", "💻"),
+    "hugging face": ("huggingface.co", "🤗"),
+    "huggingface": ("huggingface.co", "🤗"),
+    "monkeytype": ("monkeytype.com", "⌨️"),
+    "livebench": ("livebench.ai", "📊"),
+    "brave search": ("search.brave.com", "🦁"),
+    "google search": ("google.com", "🔍"),
+    "google": ("google.com", "🔍"),
+    "duckduckgo": ("duckduckgo.com", "🦆"),
+    "whatsapp": ("web.whatsapp.com", "💬"),
+    "notion": ("notion.so", "📝"),
+    "figma": ("figma.com", "🎨"),
+    "spotify": ("open.spotify.com", "🎵"),
+    "gitlab": ("gitlab.com", "🦊"),
+    "archwiki": ("wiki.archlinux.org", "🐧"),
+    "arch wiki": ("wiki.archlinux.org", "🐧"),
+    "kernel.org": ("kernel.org", "🐧"),
+    "opencode": ("opencode.ai", "⚡"),
+    "discord": ("discord.com", "💬"),
 }
 
 def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str, str, str]:
@@ -748,43 +758,29 @@ def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str, str,
 
     title = raw_title.strip()
     a_lower = (app_id or "").lower()
-    sub_link = ""
-    group_name = ""
-    icon = "🌐"
 
     title = re.sub(r"^[\(\[\{]\d+\+?[\)\]\}]\s*", "", title)
     title = re.sub(r"^[•\*\s\-_]+", "", title)
 
     if "discord" in a_lower or "vesktop" in a_lower:
-        icon = "💬"
         parts = [p.strip() for p in title.split("|")]
         if len(parts) >= 3:
             channel = parts[1].strip("•* ")
             server = parts[2].strip("•* ")
-            title = channel
-            group_name = server
-            sub_link = f"discord.com · {server}"
+            return (channel, f"discord.com · {server}", server, "💬")
         elif len(parts) == 2:
             p0 = parts[0].strip("•* ")
             p1 = parts[1].strip("•* ")
             if "direct message" in p1.lower() or "dms" in p1.lower():
-                title = f"@{p0}"
-                group_name = "Direct Messages"
-                sub_link = "discord.com · DMs"
+                return (f"@{p0}", "discord.com · DMs", "Direct Messages", "💬")
             else:
-                title = p0
-                group_name = p1
-                sub_link = f"discord.com · {p1}"
+                return (p0, f"discord.com · {p1}", p1, "💬")
         elif title.startswith("Discord"):
-            title = title[7:].strip(" -|•*")
-            group_name = "Discord"
-            sub_link = "discord.com"
-        else:
-            group_name = "Discord"
-            sub_link = "discord.com"
+            sub = title[7:].strip(" -|•*")
+            return (sub if sub else "Discord", "discord.com", "Discord", "💬")
+        return (title, "discord.com", "Discord", "💬")
 
     elif any(b in a_lower for b in ["brave", "firefox", "chrome", "chromium", "zen", "opera", "vivaldi", "edge", "librewolf", "thorium"]):
-        icon = "🌐"
         for suffix in [
             " - Brave", " — Brave", " - Mozilla Firefox", " — Mozilla Firefox",
             " - Google Chrome", " — Google Chrome", " - Chromium", " — Chromium",
@@ -795,63 +791,47 @@ def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str, str,
             if title.endswith(suffix):
                 title = title[:-len(suffix)].strip()
 
+        gh_match = re.match(r"^([a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+)(?::\s*(.*))?$", title)
+        if gh_match and not any(ext in gh_match.group(1) for ext in [".com", ".org", ".net", ".io"]):
+            repo = gh_match.group(1)
+            desc = gh_match.group(2)
+            page_title = f"{repo}: {desc}" if desc else repo
+            return (page_title, f"github.com/{repo}", "github.com", "🐙")
+
         t_low = title.lower()
-        for k_key, (k_name, k_domain, k_icon) in KNOWN_SITES.items():
+        for k_key, (k_domain, k_icon) in KNOWN_DOMAINS_MAP.items():
             if k_key in t_low:
-                sub_link = k_domain
-                group_name = k_domain
-                icon = k_icon
-                for sep in [" - ", " — ", " | "]:
-                    if f"{sep}{k_name}" in title:
-                        title = title.replace(f"{sep}{k_name}", "").strip()
-                    if f"{k_name}{sep}" in title:
-                        title = title.replace(f"{k_name}{sep}", "").strip()
-                if k_name in title and title != k_name:
-                    title = title.replace(k_name, "").strip(" -|—•")
-                break
+                clean_t = title
+                for sep in [" - ", " — ", " | ", " • ", " · "]:
+                    parts = clean_t.split(sep)
+                    filtered = [p.strip() for p in parts if p.strip() and k_key not in p.strip().lower()]
+                    if filtered:
+                        clean_t = sep.join(filtered).strip()
+                return (clean_t if clean_t else title, k_domain, k_domain, k_icon)
 
-        if not group_name:
-            domain_match = re.search(r"\b([a-zA-Z0-9-]+\.(?:com|org|net|io|dev|app|ai|me|cc|gg|tv|so|co|edu|gov|xyz|info))\b", title, re.IGNORECASE)
-            if domain_match:
-                group_name = domain_match.group(1).lower()
-                sub_link = group_name
+        domain_match = re.search(r"\b([a-zA-Z0-9-]+\.(?:com|org|net|io|dev|app|ai|me|cc|gg|tv|so|co|edu|gov|xyz|info))\b", title, re.IGNORECASE)
+        if domain_match:
+            dom = domain_match.group(1).lower()
+            clean_t = title.replace(domain_match.group(1), "").strip(" -|—•·")
+            return (clean_t if clean_t else title, dom, dom, "🌐")
 
-        if not group_name:
-            for sep in [" — ", " - ", " | "]:
-                if sep in title:
-                    parts = [p.strip() for p in title.split(sep) if p.strip()]
-                    if len(parts) >= 2:
-                        last_part = parts[-1]
-                        if len(last_part) <= 25 and not any(w in last_part.lower() for w in ["page", "tab", "window"]):
-                            group_name = last_part.lower() if "." in last_part else last_part
-                            sub_link = group_name
-                            title = sep.join(parts[:-1]).strip()
-                            break
+        for sep in [" | ", " — ", " - "]:
+            if sep in title:
+                parts = [p.strip() for p in title.split(sep) if p.strip()]
+                if len(parts) >= 2:
+                    site_name = parts[0]
+                    page_name = sep.join(parts[1:])
+                    return (page_name, site_name, site_name, "🌐")
 
-        if " — " in title:
-            parts = [p.strip() for p in title.split(" — ") if p.strip()]
-            if len(parts) == 2 and parts[0] == parts[1]:
-                title = parts[0]
-        elif " - " in title:
-            parts = [p.strip() for p in title.split(" - ") if p.strip()]
-            if len(parts) == 2 and parts[0] == parts[1]:
-                title = parts[0]
-
-        if not group_name:
-            group_name = "Other Websites & Tabs"
-            sub_link = "web"
+        return (title, "web", "Other Websites & Tabs", "🌐")
 
     elif any(e in a_lower for e in ["code", "opencode", "kate", "zed", "sublime", "idea", "pycharm"]):
-        icon = "💻"
         for suffix in [" - Visual Studio Code", " — Visual Studio Code", " - VSCodium", " — VSCodium", " — OpenCode", " - OpenCode", " — Kate", " - Zed"]:
             if title.endswith(suffix):
                 title = title[:-len(suffix)].strip()
-        group_name = "Project Workspace"
-        sub_link = "editor"
-    else:
-        icon = "📄"
-        group_name = "General"
-        sub_link = "app"
+        return (title, "editor", "Project Workspace", "💻")
+
+    return (title, "app", "General", "📄")
 
     return (title if title else raw_title, sub_link, group_name, icon)
 
