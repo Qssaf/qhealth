@@ -845,7 +845,10 @@ def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str, str,
                 title = title[:-len(suffix)].strip()
         return (title, "editor", "Project Workspace", "💻")
 
-    return (title if title else raw_title, sub_link, group_name, icon)
+    elif any(g in a_lower for g in ["steam", "game", "minecraft", "heroic", "lutris", "wine", "csgo", "cs2", "dota2", "rocket league"]):
+        return (title if title else raw_title, "gaming", "Games & Sessions", "🎮")
+
+    return (title if title else raw_title, "app", "Tasks & Windows", "📄")
 
 def infer_web_url(app_id: str, raw_title: str, clean_title: str, sub_link: str, group_name: str) -> str:
     t_low = (raw_title or "").lower()
