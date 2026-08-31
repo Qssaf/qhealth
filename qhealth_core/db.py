@@ -716,12 +716,39 @@ def get_activity_heatmap_data(days: int = 70) -> List[Dict[str, Any]]:
 
     return heatmap
 
-def clean_window_title(app_id: str, raw_title: str) -> str:
+KNOWN_SITES = {
+    "youtube": ("YouTube", "youtube.com"),
+    "github": ("GitHub", "github.com"),
+    "reddit": ("Reddit", "reddit.com"),
+    "chess.com": ("Chess.com", "chess.com"),
+    "twitter": ("X / Twitter", "x.com"),
+    "x.com": ("X", "x.com"),
+    "instagram": ("Instagram", "instagram.com"),
+    "chatgpt": ("ChatGPT", "chatgpt.com"),
+    "wikipedia": ("Wikipedia", "wikipedia.org"),
+    "twitch": ("Twitch", "twitch.tv"),
+    "stackoverflow": ("Stack Overflow", "stackoverflow.com"),
+    "stackexchange": ("Stack Exchange", "stackexchange.com"),
+    "google search": ("Google Search", "google.com"),
+    "duckduckgo": ("DuckDuckGo", "duckduckgo.com"),
+    "whatsapp": ("WhatsApp Web", "web.whatsapp.com"),
+    "notion": ("Notion", "notion.so"),
+    "figma": ("Figma", "figma.com"),
+    "spotify": ("Spotify", "open.spotify.com"),
+    "gitlab": ("GitLab", "gitlab.com"),
+    "archwiki": ("ArchWiki", "wiki.archlinux.org"),
+    "arch wiki": ("ArchWiki", "wiki.archlinux.org"),
+    "kernel.org": ("Kernel Docs", "kernel.org"),
+    "opencode": ("OpenCode", "opencode.ai"),
+}
+
+def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str]:
     if not raw_title:
-        return ""
+        return ("", "")
 
     title = raw_title.strip()
-    a_lower = app_id.lower()
+    a_lower = (app_id or "").lower()
+    sub_link = ""
 
     title = re.sub(r"^[\(\[\{]\d+\+?[\)\]\}]\s*", "", title)
     title = re.sub(r"^[•\*\s\-_]+", "", title)
@@ -732,6 +759,7 @@ def clean_window_title(app_id: str, raw_title: str) -> str:
             channel = parts[1].strip("•* ")
             server = parts[2].strip("•* ")
             title = f"{channel} ({server})"
+            sub_link = "discord.com"
         elif len(parts) == 2:
             p0 = parts[0].strip("•* ")
             p1 = parts[1].strip("•* ")
@@ -739,9 +767,10 @@ def clean_window_title(app_id: str, raw_title: str) -> str:
                 title = f"@{p0} (DM)"
             else:
                 title = f"{p0} ({p1})"
+            sub_link = "discord.com"
         elif title.startswith("Discord"):
             title = title[7:].strip(" -|•*")
-            title = title if title else "Discord"
+            sub_link = "discord.com"
 
     elif any(b in a_lower for b in ["brave", "firefox", "chrome", "chromium", "zen", "opera", "vivaldi", "edge", "librewolf", "thorium"]):
         for suffix in [
@@ -754,6 +783,58 @@ def clean_window_title(app_id: str, raw_title: str) -> str:
             if title.endswith(suffix):
                 title = title[:-len(suffix)].strip()
 
+        if "Chess.com" in title:
+            title = "Chess.com"
+            sub_link = "chess.com"
+        elif "YouTube" in title:
+            clean_yt = title.replace(" - YouTube", "").replace("YouTube - ", "").strip()
+            title = f"YouTube: {clean_yt}" if clean_yt else "YouTube"
+            sub_link = "youtube.com"
+        elif "WhatsApp" in title:
+            title = "WhatsApp Web"
+            sub_link = "web.whatsapp.com"
+        elif "GitHub" in title:
+            clean_gh = title.replace(" - GitHub", "").replace("GitHub - ", "").strip()
+            title = f"GitHub: {clean_gh}" if clean_gh else "GitHub"
+            sub_link = "github.com"
+        elif "Reddit" in title:
+            clean_rd = title.replace(" - Reddit", "").replace("Reddit - ", "").strip()
+            title = f"Reddit: {clean_rd}" if clean_rd else "Reddit"
+            sub_link = "reddit.com"
+        elif "Google Search" in title:
+            q = title.replace(" - Google Search", "").replace("Google Search - ", "").strip()
+            title = f"Google: {q}" if q else "Google Search"
+            sub_link = "google.com"
+        elif "DuckDuckGo" in title:
+            q = title.replace(" at DuckDuckGo", "").replace(" - DuckDuckGo", "").strip()
+            title = f"DuckDuckGo: {q}" if q else "DuckDuckGo"
+            sub_link = "duckduckgo.com"
+        elif "ChatGPT" in title:
+            title = "ChatGPT"
+            sub_link = "chatgpt.com"
+        else:
+            t_low = title.lower()
+            for k_key, (k_name, k_domain) in KNOWN_SITES.items():
+                if k_key in t_low:
+                    sub_link = k_domain
+                    break
+
+        if not sub_link:
+            domain_match = re.search(r"\b([a-zA-Z0-9-]+\.(?:com|org|net|io|dev|app|ai|me|cc|gg|tv|so|co|edu|gov|xyz|info))\b", title, re.IGNORECASE)
+            if domain_match:
+                sub_link = domain_match.group(1).lower()
+
+        if not sub_link:
+            for sep in [" — ", " - ", " | "]:
+                if sep in title:
+                    parts = [p.strip() for p in title.split(sep) if p.strip()]
+                    if len(parts) >= 2:
+                        last_part = parts[-1]
+                        if len(last_part) <= 25 and not any(w in last_part.lower() for w in ["page", "tab", "window"]):
+                            sub_link = last_part.lower() if "." in last_part else last_part
+                            title = sep.join(parts[:-1]).strip()
+                            break
+
         if " — " in title:
             parts = [p.strip() for p in title.split(" — ") if p.strip()]
             if len(parts) == 2 and parts[0] == parts[1]:
@@ -763,34 +844,20 @@ def clean_window_title(app_id: str, raw_title: str) -> str:
             if len(parts) == 2 and parts[0] == parts[1]:
                 title = parts[0]
 
-        if "Chess.com" in title:
-            title = "Chess.com"
-        elif "YouTube" in title:
-            clean_yt = title.replace(" - YouTube", "").replace("YouTube - ", "").strip()
-            title = f"YouTube: {clean_yt}" if clean_yt else "YouTube"
-        elif "WhatsApp" in title:
-            title = "WhatsApp Web"
-        elif "GitHub" in title:
-            clean_gh = title.replace(" - GitHub", "").replace("GitHub - ", "").strip()
-            title = f"GitHub: {clean_gh}" if clean_gh else "GitHub"
-        elif "Reddit" in title:
-            clean_rd = title.replace(" - Reddit", "").replace("Reddit - ", "").strip()
-            title = f"Reddit: {clean_rd}" if clean_rd else "Reddit"
-        elif "Google Search" in title:
-            q = title.replace(" - Google Search", "").replace("Google Search - ", "").strip()
-            title = f"Google: {q}" if q else "Google Search"
-        elif "DuckDuckGo" in title:
-            q = title.replace(" at DuckDuckGo", "").replace(" - DuckDuckGo", "").strip()
-            title = f"DuckDuckGo: {q}" if q else "DuckDuckGo"
-        elif "ChatGPT" in title:
-            title = "ChatGPT"
+        if not sub_link:
+            sub_link = "web"
 
     elif any(e in a_lower for e in ["code", "opencode", "kate", "zed", "sublime", "idea", "pycharm"]):
         for suffix in [" - Visual Studio Code", " — Visual Studio Code", " - VSCodium", " — VSCodium", " — OpenCode", " - OpenCode", " — Kate", " - Zed"]:
             if title.endswith(suffix):
                 title = title[:-len(suffix)].strip()
+        sub_link = "editor"
 
-    return title if title else raw_title
+    return (title if title else raw_title, sub_link)
+
+def clean_window_title(app_id: str, raw_title: str) -> str:
+    title, _ = parse_window_title_info(app_id, raw_title)
+    return title
 
 def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Optional[str] = None) -> Dict[str, Any]:
     """
@@ -954,20 +1021,22 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
         tot_app_dur = summary["total_duration"]
         for r in page_rows:
             raw_t = r["window_title"]
-            clean_t = clean_window_title(app_id, raw_t)
+            clean_t, sub_link = parse_window_title_info(app_id, raw_t)
             if not clean_t:
                 continue
-            if clean_t not in consolidated:
-                consolidated[clean_t] = {
+            key = (clean_t, sub_link)
+            if key not in consolidated:
+                consolidated[key] = {
                     "raw_title": raw_t,
                     "clean_title": clean_t,
+                    "sub_link": sub_link,
                     "duration": 0,
                     "keystrokes": 0,
                     "clicks": 0
                 }
-            consolidated[clean_t]["duration"] += r["duration"]
-            consolidated[clean_t]["keystrokes"] += r["keystrokes"]
-            consolidated[clean_t]["clicks"] += r["clicks"]
+            consolidated[key]["duration"] += r["duration"]
+            consolidated[key]["keystrokes"] += r["keystrokes"]
+            consolidated[key]["clicks"] += r["clicks"]
 
         sorted_pages = sorted(consolidated.values(), key=lambda p: p["duration"], reverse=True)
         pages_breakdown = []

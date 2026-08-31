@@ -39,28 +39,57 @@ class PageRowWidget(QFrame):
     def __init__(self, page_data: Dict[str, Any], parent=None):
         super().__init__(parent)
         self.setProperty("class", "GlassCardInner")
-        self.setMinimumHeight(60)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+        self.clean_title = page_data.get("clean_title") or page_data.get("raw_title", "Unknown Page")
+        self.raw_title = page_data.get("raw_title", self.clean_title)
+        self.sub_link = page_data.get("sub_link", "")
+        self.is_expanded = False
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 14, 10)
-        lay.setSpacing(6)
+        lay.setSpacing(5)
 
-        clean_title = page_data.get("clean_title") or page_data.get("raw_title", "Unknown Page")
-        raw_title = page_data.get("raw_title", clean_title)
         dur = page_data.get("duration", 0)
         pct = page_data.get("percentage", 0.0)
 
         top_row = QHBoxLayout()
-        top_row.setSpacing(12)
+        top_row.setSpacing(8)
 
-        display_title = clean_title
-        if len(display_title) > 55:
-            display_title = display_title[:52].rstrip() + "..."
+        self.truncated_title = self.clean_title
+        self.is_long = len(self.clean_title) > 55
+        if self.is_long:
+            self.truncated_title = self.clean_title[:52].rstrip() + "..."
 
-        t_lbl = QLabel(display_title)
-        t_lbl.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: 700;")
-        t_lbl.setToolTip(f"{clean_title}\n\nFull Raw Title:\n{raw_title}" if clean_title != raw_title else raw_title)
-        top_row.addWidget(t_lbl, 1)
+        self.t_lbl = QLabel(self.truncated_title)
+        self.t_lbl.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: 700;")
+        self.t_lbl.setWordWrap(False)
+        self.t_lbl.setToolTip(f"{self.clean_title}\n\nFull Raw Title:\n{self.raw_title}" if self.clean_title != self.raw_title else self.raw_title)
+        top_row.addWidget(self.t_lbl, 1)
+
+        if self.is_long or (self.raw_title and len(self.raw_title) > len(self.clean_title) + 10):
+            self.expand_btn = QPushButton("▾")
+            self.expand_btn.setFixedSize(22, 22)
+            self.expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.expand_btn.setToolTip("Click to expand / collapse full title")
+            self.expand_btn.setStyleSheet("""
+                QPushButton {
+                    background: rgba(30, 41, 59, 0.5);
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 4px;
+                    color: #94a3b8;
+                    font-size: 11px;
+                    font-weight: bold;
+                    padding: 0px;
+                }
+                QPushButton:hover {
+                    background: rgba(51, 65, 85, 0.8);
+                    color: #38bdf8;
+                    border-color: rgba(56, 189, 248, 0.4);
+                }
+            """)
+            self.expand_btn.clicked.connect(self.toggle_expand)
+            top_row.addWidget(self.expand_btn)
 
         dur_box = QHBoxLayout()
         dur_box.setSpacing(6)
@@ -74,6 +103,13 @@ class PageRowWidget(QFrame):
         dur_box.addWidget(pct_lbl)
         top_row.addLayout(dur_box)
         lay.addLayout(top_row)
+
+        if self.sub_link and self.sub_link not in ("web", "editor"):
+            link_icon = "💬 " if "discord.com" in self.sub_link else "🌐 "
+            link_lbl = QLabel(f"{link_icon}{self.sub_link}")
+            link_lbl.setStyleSheet("color: #64748b; font-size: 11px; font-weight: 500; font-family: monospace;")
+            link_lbl.setWordWrap(False)
+            lay.addWidget(link_lbl)
 
         bot_row = QHBoxLayout()
         bot_row.setSpacing(12)
@@ -104,6 +140,20 @@ class PageRowWidget(QFrame):
             bot_row.addWidget(k_lbl)
 
         lay.addLayout(bot_row)
+
+    def toggle_expand(self):
+        self.is_expanded = not self.is_expanded
+        if self.is_expanded:
+            self.t_lbl.setWordWrap(True)
+            self.t_lbl.setText(self.clean_title if len(self.clean_title) > 55 else self.raw_title)
+            if hasattr(self, "expand_btn"):
+                self.expand_btn.setText("▴")
+        else:
+            self.t_lbl.setWordWrap(False)
+            self.t_lbl.setText(self.truncated_title)
+            if hasattr(self, "expand_btn"):
+                self.expand_btn.setText("▾")
+        self.updateGeometry()
 
 
 class AppTrendBarsPainter(QWidget):

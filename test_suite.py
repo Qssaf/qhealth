@@ -116,12 +116,17 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(detail_day["pages_breakdown"][0]["clean_title"], "#general (OpenCode)")
         self.assertEqual(len(detail_day["timeline"]), 24) # 24 hours
 
-        # Test title cleaning
-        clean_yt = db.clean_window_title("brave-browser", "YouTube - Lofi Hip Hop Stream - Brave")
+        clean_yt, yt_link = db.parse_window_title_info("brave-browser", "YouTube - Lofi Hip Hop Stream - Brave")
         self.assertEqual(clean_yt, "YouTube: Lofi Hip Hop Stream")
+        self.assertEqual(yt_link, "youtube.com")
 
-        clean_gh = db.clean_window_title("firefox", "GitHub - Qssaf/qhealth: Digital Wellbeing — Mozilla Firefox")
+        clean_gh, gh_link = db.parse_window_title_info("firefox", "GitHub - Qssaf/qhealth: Digital Wellbeing — Mozilla Firefox")
         self.assertEqual(clean_gh, "GitHub: Qssaf/qhealth: Digital Wellbeing")
+        self.assertEqual(gh_link, "github.com")
+
+        clean_chess, chess_link = db.parse_window_title_info("brave-browser", "Play Chess Online - Chess.com - Brave")
+        self.assertEqual(clean_chess, "Chess.com")
+        self.assertEqual(chess_link, "chess.com")
 
         # Test week range
         detail_week = db.get_app_detail_stats("vesktop", "week")
