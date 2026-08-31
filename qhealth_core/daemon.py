@@ -17,17 +17,26 @@ class QHealthDaemon:
     def __init__(self):
         self.running = False
         self.notified_budget_alerts = set()
+        self._lock_file = None
         init_db()
         self.tracker = ActivityTracker()
 
     def start(self):
-        self.running = True
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         
-        # Write PID file
-        with open(PID_FILE, "w") as f:
-            f.write(str(os.getpid()))
+        try:
+            import fcntl
+            self._lock_file = open(PID_FILE, "a+")
+            fcntl.flock(self._lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._lock_file.seek(0)
+            self._lock_file.truncate()
+            self._lock_file.write(str(os.getpid()))
+            self._lock_file.flush()
+        except (IOError, BlockingIOError):
+            print(f"[QHealth Daemon] Another daemon instance is already active. Exiting.")
+            sys.exit(0)
 
+        self.running = True
         self.tracker.start()
 
         # Handle clean shutdown signals

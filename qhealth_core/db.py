@@ -577,7 +577,9 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
             hourly_map = {row["hour_int"]: dict(row) for row in cursor.fetchall()}
             timeline = []
             for h in range(24):
-                timeline.append(hourly_map.get(h, {"hour_int": h, "duration": 0, "keystrokes": 0, "clicks": 0}))
+                entry = dict(hourly_map.get(h, {"hour_int": h, "duration": 0, "keystrokes": 0, "clicks": 0}))
+                entry["duration"] = min(3600, int(entry.get("duration", 0)))
+                timeline.append(entry)
         elif range_type in ("week", "month"):
             num_days = 7 if range_type == "week" else 30
             cursor.execute(f"""
@@ -934,7 +936,9 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
             hourly_map = {r["hour_int"]: dict(r) for r in cursor.fetchall()}
             timeline = []
             for h in range(24):
-                timeline.append(hourly_map.get(h, {"hour_int": h, "duration": 0, "keystrokes": 0, "clicks": 0}))
+                entry = dict(hourly_map.get(h, {"hour_int": h, "duration": 0, "keystrokes": 0, "clicks": 0}))
+                entry["duration"] = min(3600, int(entry.get("duration", 0)))
+                timeline.append(entry)
         elif range_type in ("week", "month"):
             num_days = 7 if range_type == "week" else 30
             cursor.execute(f"""
