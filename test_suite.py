@@ -28,7 +28,7 @@ class TestDatabase(unittest.TestCase):
 
         db.DB_DIR = Path(self.temp_dir.name)
         db.DB_PATH = db.DB_DIR / "test_qhealth.db"
-        db.init_db()
+        db.init_db(force=True)
 
     def tearDown(self):
         db.DB_DIR = self.orig_db_dir

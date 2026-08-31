@@ -64,7 +64,13 @@ def get_category_for_app(app_id: str, app_name: str) -> str:
                 return category
     return "Other"
 
-def init_db():
+_db_initialized = False
+
+def init_db(force: bool = False):
+    global _db_initialized
+    if _db_initialized and not force:
+        return
+
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("PRAGMA journal_mode = WAL;")
@@ -79,7 +85,7 @@ def init_db():
             hour_int INTEGER NOT NULL,
             app_id TEXT NOT NULL,
             app_name TEXT NOT NULL,
-            window_title TEXT,
+            window_title TEXT NOT NULL DEFAULT '',
             category TEXT NOT NULL,
             duration_seconds INTEGER NOT NULL DEFAULT 0,
             keystrokes INTEGER NOT NULL DEFAULT 0,
@@ -140,6 +146,7 @@ def init_db():
         """)
         
         conn.commit()
+        _db_initialized = True
 
 def set_app_budget(app_id: str, daily_limit_minutes: int, enabled: bool = True):
     init_db()
@@ -322,21 +329,26 @@ def get_keyboard_heatmap_data(range_type: str = "day", target_date: Optional[str
     if not target_date:
         target_date = today.strftime("%Y-%m-%d")
 
+    try:
+        anchor_date = datetime.datetime.strptime(target_date, "%Y-%m-%d").date()
+    except Exception:
+        anchor_date = today
+
     with get_db() as conn:
         cursor = conn.cursor()
         if range_type == "day":
             date_condition = "date_str = ?"
             params = [target_date]
         elif range_type == "week":
-            start_date = (today - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
+            start_date = (anchor_date - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
             date_condition = "date_str >= ? AND date_str <= ?"
             params = [start_date, target_date]
         elif range_type == "month":
-            start_date = (today - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
+            start_date = (anchor_date - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
             date_condition = "date_str >= ? AND date_str <= ?"
             params = [start_date, target_date]
         elif range_type == "year":
-            start_date = (today - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
+            start_date = (anchor_date - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
             date_condition = "date_str >= ? AND date_str <= ?"
             params = [start_date, target_date]
         elif range_type == "all_time":
@@ -360,21 +372,26 @@ def get_mouse_heatmap_data(range_type: str = "day", target_date: Optional[str] =
     if not target_date:
         target_date = today.strftime("%Y-%m-%d")
 
+    try:
+        anchor_date = datetime.datetime.strptime(target_date, "%Y-%m-%d").date()
+    except Exception:
+        anchor_date = today
+
     with get_db() as conn:
         cursor = conn.cursor()
         if range_type == "day":
             date_condition = "date_str = ?"
             params = [target_date]
         elif range_type == "week":
-            start_date = (today - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
+            start_date = (anchor_date - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
             date_condition = "date_str >= ? AND date_str <= ?"
             params = [start_date, target_date]
         elif range_type == "month":
-            start_date = (today - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
+            start_date = (anchor_date - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
             date_condition = "date_str >= ? AND date_str <= ?"
             params = [start_date, target_date]
         elif range_type == "year":
-            start_date = (today - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
+            start_date = (anchor_date - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
             date_condition = "date_str >= ? AND date_str <= ?"
             params = [start_date, target_date]
         elif range_type == "all_time":
@@ -437,6 +454,11 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
     if not target_date:
         target_date = today.strftime("%Y-%m-%d")
 
+    try:
+        anchor_date = datetime.datetime.strptime(target_date, "%Y-%m-%d").date()
+    except Exception:
+        anchor_date = today
+
     with get_db() as conn:
         cursor = conn.cursor()
 
@@ -444,15 +466,15 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
             date_condition = "date_str = ?"
             params = [target_date]
         elif range_type == "week":
-            start_date = (today - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
+            start_date = (anchor_date - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
             date_condition = "date_str >= ? AND date_str <= ?"
             params = [start_date, target_date]
         elif range_type == "month":
-            start_date = (today - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
+            start_date = (anchor_date - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
             date_condition = "date_str >= ? AND date_str <= ?"
             params = [start_date, target_date]
         elif range_type == "year":
-            start_date = (today - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
+            start_date = (anchor_date - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
             date_condition = "date_str >= ? AND date_str <= ?"
             params = [start_date, target_date]
         elif range_type == "all_time":
@@ -702,6 +724,11 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
     if not target_date:
         target_date = today.strftime("%Y-%m-%d")
 
+    try:
+        anchor_date = datetime.datetime.strptime(target_date, "%Y-%m-%d").date()
+    except Exception:
+        anchor_date = today
+
     with get_db() as conn:
         cursor = conn.cursor()
 
@@ -709,15 +736,15 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
             date_condition = "date_str = ?"
             params = [target_date]
         elif range_type == "week":
-            start_date = (today - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
+            start_date = (anchor_date - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
             date_condition = "date_str >= ? AND date_str <= ?"
             params = [start_date, target_date]
         elif range_type == "month":
-            start_date = (today - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
+            start_date = (anchor_date - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
             date_condition = "date_str >= ? AND date_str <= ?"
             params = [start_date, target_date]
         elif range_type == "year":
-            start_date = (today - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
+            start_date = (anchor_date - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
             date_condition = "date_str >= ? AND date_str <= ?"
             params = [start_date, target_date]
         elif range_type == "all_time":

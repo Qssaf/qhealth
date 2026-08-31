@@ -267,6 +267,12 @@ class ActivityTracker:
             with open(script_path, "w") as f:
                 f.write(kwin_script)
             
+            # Unload any previously loaded script to prevent duplicate signal handlers
+            subprocess.run([
+                "busctl", "--user", "call", "org.kde.KWin", "/Scripting",
+                "org.kde.kwin.Scripting", "unloadScript", "s", script_path
+            ], capture_output=True, timeout=3)
+
             res_load = subprocess.run([
                 "busctl", "--user", "call", "org.kde.KWin", "/Scripting",
                 "org.kde.kwin.Scripting", "loadScript", "s", script_path

@@ -16,17 +16,9 @@ def main():
         daemon = QHealthDaemon()
         daemon.start()
     else:
-        from PyQt6.QtWidgets import QApplication
-        from qhealth_gui.main_window import QHealthMainWindow, create_app_icon
-
-        app = QApplication(sys.argv)
-        app.setApplicationName("QHealth")
-        app.setDesktopFileName("qhealth")
-        app.setWindowIcon(create_app_icon())
-
-        window = QHealthMainWindow()
-        window.show()
-        sys.exit(app.exec())
+        from qhealth_core.desktop_app import QHealthApp
+        app = QHealthApp()
+        sys.exit(app.run(show_gui=True))
 
 if __name__ == "__main__":
     main()

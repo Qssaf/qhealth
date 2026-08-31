@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
+import QtCore
 import org.kde.plasma.plasmoid
 import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.components as PlasmaComponents3
@@ -32,7 +33,9 @@ PlasmoidItem {
                 }
             }
         };
-        doc.open("GET", "file:///home/qsssaf/.local/share/qhealth/live_state.json");
+        var dataPath = StandardPaths.writableLocation(StandardPaths.GenericDataLocation);
+        var url = "file://" + dataPath + "/qhealth/live_state.json";
+        doc.open("GET", url);
         doc.send();
     }
 
@@ -54,7 +57,9 @@ PlasmoidItem {
         cursorShape: Qt.PointingHandCursor
 
         onClicked: {
-            Qt.openUrlExternally("file:///home/qsssaf/.local/bin/qhealth");
+            var homePath = StandardPaths.writableLocation(StandardPaths.HomeLocation);
+            var execUrl = "file://" + homePath + "/.local/bin/qhealth";
+            Qt.openUrlExternally(execUrl);
         }
 
         RowLayout {
