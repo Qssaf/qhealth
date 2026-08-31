@@ -47,11 +47,16 @@ class AppInfoResolver:
         if cls._instance is None:
             cls._instance = super(AppInfoResolver, cls).__new__(cls)
             cls._instance._apps_cache = {}
+            cls._instance._resolved_cache = {}
             cls._instance._scan_desktop_files()
         return cls._instance
 
+    def clear_cache(self):
+        self._resolved_cache.clear()
+
     def _scan_desktop_files(self):
         self._apps_cache.clear()
+        self._resolved_cache.clear()
         for d in DESKTOP_DIRS:
             if not os.path.exists(d):
                 continue
@@ -105,22 +110,26 @@ class AppInfoResolver:
         return "Other"
 
     def resolve(self, raw_app_id: str, raw_title: str = "", raw_class: str = "") -> Dict[str, Any]:
-        """Resolves raw window class/id to proper clean name, icon, and category."""
+        cache_key = (raw_app_id, raw_class)
+        if cache_key in self._resolved_cache:
+            return self._resolved_cache[cache_key]
+
         cleaned_id = raw_app_id.lower().strip() if raw_app_id else ""
         if cleaned_id.endswith(".desktop"):
             cleaned_id = cleaned_id[:-8]
         cleaned_cls = raw_class.lower().strip() if raw_class else ""
 
         if not cleaned_id or cleaned_id in IDLE_APPS or (cleaned_cls and cleaned_cls in IDLE_APPS):
-            return {
+            res = {
                 "app_id": "desktop",
                 "display_name": "Desktop / Idle",
                 "icon": "user-desktop",
                 "category": "System",
                 "is_active_window": False
             }
+            self._resolved_cache[cache_key] = res
+            return res
 
-        # 1. Custom User Rules from DB (Top Priority)
         try:
             from .db import get_custom_app_rules
             user_rules = get_custom_app_rules()
@@ -129,54 +138,64 @@ class AppInfoResolver:
                 base_info = self._apps_cache.get(cleaned_id) or self._apps_cache.get(cleaned_cls) or {}
                 icon = base_info.get("icon", cleaned_id)
                 display_name = matched_rule.get("display_name") or base_info.get("display_name", cleaned_id.replace("-", " ").title())
-                return {
+                res = {
                     "app_id": cleaned_id,
                     "display_name": display_name,
                     "icon": icon,
                     "category": matched_rule["category"],
                     "is_active_window": True
                 }
+                self._resolved_cache[cache_key] = res
+                return res
         except Exception:
             pass
 
-        # 2. Explicit overrides
         if cleaned_id in EXPLICIT_OVERRIDES:
             ov = EXPLICIT_OVERRIDES[cleaned_id]
-            return {"app_id": cleaned_id, "display_name": ov["display_name"], "icon": ov["icon"], "category": ov["category"], "is_active_window": True}
+            res = {"app_id": cleaned_id, "display_name": ov["display_name"], "icon": ov["icon"], "category": ov["category"], "is_active_window": True}
+            self._resolved_cache[cache_key] = res
+            return res
         if cleaned_cls in EXPLICIT_OVERRIDES:
             ov = EXPLICIT_OVERRIDES[cleaned_cls]
-            return {"app_id": cleaned_cls, "display_name": ov["display_name"], "icon": ov["icon"], "category": ov["category"], "is_active_window": True}
+            res = {"app_id": cleaned_cls, "display_name": ov["display_name"], "icon": ov["icon"], "category": ov["category"], "is_active_window": True}
+            self._resolved_cache[cache_key] = res
+            return res
 
-        # 2. Exact match in scanned desktop files cache
         if cleaned_id in self._apps_cache:
             info = self._apps_cache[cleaned_id]
-            return {"app_id": cleaned_id, "display_name": info["display_name"], "icon": info["icon"], "category": info["category"], "is_active_window": True}
+            res = {"app_id": cleaned_id, "display_name": info["display_name"], "icon": info["icon"], "category": info["category"], "is_active_window": True}
+            self._resolved_cache[cache_key] = res
+            return res
 
         if cleaned_cls and cleaned_cls in self._apps_cache:
             info = self._apps_cache[cleaned_cls]
-            return {"app_id": cleaned_cls, "display_name": info["display_name"], "icon": info["icon"], "category": info["category"], "is_active_window": True}
+            res = {"app_id": cleaned_cls, "display_name": info["display_name"], "icon": info["icon"], "category": info["category"], "is_active_window": True}
+            self._resolved_cache[cache_key] = res
+            return res
 
-        # 3. Exact word boundary / token match (prevent 'code' from matching 'opencode')
         tokens = set(re.split(r"[\.\-_/\s]+", f"{cleaned_id} {cleaned_cls}"))
         for key, info in self._apps_cache.items():
             if key in tokens:
-                return {
+                res = {
                     "app_id": key,
                     "display_name": info["display_name"],
                     "icon": info["icon"],
                     "category": info["category"],
                     "is_active_window": True
                 }
+                self._resolved_cache[cache_key] = res
+                return res
 
-        # 4. Fallback formatting
         pretty_name = cleaned_id.replace("-", " ").replace("_", " ").title()
         category = self._detect_category("", cleaned_id, pretty_name)
-        return {
+        res = {
             "app_id": cleaned_id,
             "display_name": pretty_name,
             "icon": cleaned_id,
             "category": category,
             "is_active_window": True
         }
+        self._resolved_cache[cache_key] = res
+        return res
 
 app_resolver = AppInfoResolver()

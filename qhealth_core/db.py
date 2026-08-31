@@ -44,12 +44,21 @@ DEFAULT_CATEGORIES = {
     ]
 }
 
+RE_COUNT_BADGES = re.compile(r"^[\(\[\{]\d+\+?[\)\]\}]\s*")
+RE_LEAD_CHARS = re.compile(r"^[•\*\s\-_]+")
+RE_GH_REPO = re.compile(r"^([a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+)(?::\s*(.*))?$")
+RE_DOMAIN = re.compile(r"\b([a-zA-Z0-9-]+\.(?:com|org|net|io|dev|app|ai|me|cc|gg|tv|so|co|edu|gov|xyz|info))\b", re.IGNORECASE)
+
 @contextmanager
 def get_db():
     DB_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000;")
+    conn.execute("PRAGMA synchronous = NORMAL;")
+    conn.execute("PRAGMA cache_size = -16000;")
+    conn.execute("PRAGMA mmap_size = 67108864;")
+    conn.execute("PRAGMA temp_store = MEMORY;")
     try:
         yield conn
     finally:
@@ -99,6 +108,8 @@ def init_db(force: bool = False):
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_date ON activity_log(date_str)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_app ON activity_log(app_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_category ON activity_log(category)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_act_app_date_dur ON activity_log(app_id, date_str, duration_seconds)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_act_date_dur ON activity_log(date_str, duration_seconds)")
         
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS custom_app_rules (
@@ -759,8 +770,8 @@ def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str, str,
     title = raw_title.strip()
     a_lower = (app_id or "").lower()
 
-    title = re.sub(r"^[\(\[\{]\d+\+?[\)\]\}]\s*", "", title)
-    title = re.sub(r"^[•\*\s\-_]+", "", title)
+    title = RE_COUNT_BADGES.sub("", title)
+    title = RE_LEAD_CHARS.sub("", title)
 
     if "discord" in a_lower or "vesktop" in a_lower:
         parts = [p.strip() for p in title.split("|")]
@@ -791,7 +802,7 @@ def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str, str,
             if title.endswith(suffix):
                 title = title[:-len(suffix)].strip()
 
-        gh_match = re.match(r"^([a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+)(?::\s*(.*))?$", title)
+        gh_match = RE_GH_REPO.match(title)
         if gh_match and not any(ext in gh_match.group(1) for ext in [".com", ".org", ".net", ".io"]):
             repo = gh_match.group(1)
             desc = gh_match.group(2)
@@ -809,7 +820,7 @@ def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str, str,
                         clean_t = sep.join(filtered).strip()
                 return (clean_t if clean_t else title, k_domain, k_domain, k_icon)
 
-        domain_match = re.search(r"\b([a-zA-Z0-9-]+\.(?:com|org|net|io|dev|app|ai|me|cc|gg|tv|so|co|edu|gov|xyz|info))\b", title, re.IGNORECASE)
+        domain_match = RE_DOMAIN.search(title)
         if domain_match:
             dom = domain_match.group(1).lower()
             clean_t = title.replace(domain_match.group(1), "").strip(" -|—•·")
@@ -830,6 +841,8 @@ def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str, str,
             if title.endswith(suffix):
                 title = title[:-len(suffix)].strip()
         return (title, "editor", "Project Workspace", "💻")
+
+    return (title, "app", "General", "📄")
 
     return (title, "app", "General", "📄")
 

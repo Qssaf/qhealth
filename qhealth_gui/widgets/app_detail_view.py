@@ -150,11 +150,25 @@ class PageRowWidget(QFrame):
         lay.addLayout(bot_row)
 
         self.sub_container = QWidget()
-        self.sub_container.setVisible(self.is_expanded)
-        self.expand_btn.setText("▴" if self.is_expanded else "▾")
-        sub_lay = QVBoxLayout(self.sub_container)
-        sub_lay.setContentsMargins(12, 8, 4, 4)
-        sub_lay.setSpacing(8)
+        self.sub_lay = QVBoxLayout(self.sub_container)
+        self.sub_lay.setContentsMargins(12, 8, 4, 4)
+        self.sub_lay.setSpacing(8)
+        self._sub_widgets_built = False
+
+        lay.addWidget(self.sub_container)
+
+        if self.is_expanded:
+            self._build_sub_widgets()
+            self.sub_container.setVisible(True)
+            self.expand_btn.setText("▴")
+        else:
+            self.sub_container.setVisible(False)
+            self.expand_btn.setText("▾")
+
+    def _build_sub_widgets(self):
+        if self._sub_widgets_built:
+            return
+        self._sub_widgets_built = True
 
         for p_info in self.pages:
             p_clean = p_info.get("clean_title", "Unknown Page")
@@ -234,9 +248,7 @@ class PageRowWidget(QFrame):
                 p_bot.addWidget(p_k_lbl)
 
             p_box_lay.addLayout(p_bot)
-            sub_lay.addWidget(p_box)
-
-        lay.addWidget(self.sub_container)
+            self.sub_lay.addWidget(p_box)
 
     def mousePressEvent(self, event):
         self.toggle_expand()
@@ -244,6 +256,8 @@ class PageRowWidget(QFrame):
 
     def toggle_expand(self):
         self.is_expanded = not self.is_expanded
+        if self.is_expanded:
+            self._build_sub_widgets()
         self.sub_container.setVisible(self.is_expanded)
         self.expand_btn.setText("▴" if self.is_expanded else "▾")
         if self.parent_view and hasattr(self.parent_view, "expanded_groups"):
