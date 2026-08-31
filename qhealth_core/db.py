@@ -1,5 +1,6 @@
 import os
 import re
+import urllib.parse
 import sqlite3
 import datetime
 from pathlib import Path
@@ -844,11 +845,87 @@ def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str, str,
                 title = title[:-len(suffix)].strip()
         return (title, "editor", "Project Workspace", "💻")
 
-    return (title, "app", "General", "📄")
-
-    return (title, "app", "General", "📄")
-
     return (title if title else raw_title, sub_link, group_name, icon)
+
+def infer_web_url(app_id: str, raw_title: str, clean_title: str, sub_link: str, group_name: str) -> str:
+    t_low = (raw_title or "").lower()
+    c_low = (clean_title or "").lower()
+
+    gh_match = re.search(r"\b([a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+)\b", raw_title)
+    if ("github" in t_low or group_name == "github.com" or "github" in sub_link) and gh_match:
+        repo = gh_match.group(1).rstrip(".")
+        return f"https://github.com/{repo}"
+    elif group_name == "github.com":
+        return "https://github.com"
+
+    if group_name == "youtube.com" or "youtube" in t_low:
+        if clean_title and clean_title != "YouTube":
+            q = urllib.parse.quote_plus(clean_title)
+            return f"https://youtube.com/results?search_query={q}"
+        return "https://youtube.com"
+
+    if group_name == "chess.com" or "chess.com" in t_low:
+        if "puzzle" in c_low:
+            return "https://chess.com/puzzles"
+        elif "analysis" in c_low or "pgn" in c_low:
+            return "https://chess.com/analysis"
+        elif "computer" in c_low:
+            return "https://chess.com/play/computer"
+        elif "profile" in c_low:
+            u_match = re.search(r"^([a-zA-Z0-9_\-]+)", clean_title)
+            if u_match:
+                return f"https://chess.com/member/{u_match.group(1)}"
+            return "https://chess.com/members"
+        elif "online" in c_low or "play" in c_low:
+            return "https://chess.com/play/online"
+        return "https://chess.com"
+
+    if group_name == "reddit.com" or "reddit" in t_low:
+        r_match = re.search(r"r/([a-zA-Z0-9_]+)", raw_title)
+        if r_match:
+            return f"https://reddit.com/r/{r_match.group(1)}"
+        return "https://reddit.com"
+
+    if group_name == "instagram.com" or "instagram" in t_low:
+        if "message" in c_low or "direct" in c_low:
+            return "https://instagram.com/direct/inbox/"
+        return "https://instagram.com"
+
+    if "hugging face" in t_low or group_name == "huggingface.co":
+        hf_match = re.search(r"\b([a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+)\b", raw_title)
+        if hf_match:
+            return f"https://huggingface.co/{hf_match.group(1)}"
+        return "https://huggingface.co"
+
+    if group_name == "search.brave.com" or "brave search" in t_low:
+        q = urllib.parse.quote_plus(clean_title)
+        return f"https://search.brave.com/search?q={q}"
+    if group_name == "google.com" or "google search" in t_low:
+        q = urllib.parse.quote_plus(clean_title)
+        return f"https://google.com/search?q={q}"
+
+    if "whatsapp" in t_low or group_name == "web.whatsapp.com":
+        return "https://web.whatsapp.com"
+
+    if "." in group_name and not group_name.startswith("Other"):
+        return f"https://{group_name}"
+
+    if "." in sub_link and not sub_link.startswith("web"):
+        return f"https://{sub_link}"
+
+    return ""
+
+def vacuum_and_cleanup_db():
+    init_db()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM activity_log WHERE duration_seconds <= 0 AND keystrokes <= 0 AND clicks <= 0")
+        conn.commit()
+        try:
+            cursor.execute("PRAGMA wal_checkpoint(PASSIVE);")
+            cursor.execute("PRAGMA optimize;")
+        except Exception:
+            pass
 
 def clean_window_title(app_id: str, raw_title: str) -> str:
     res = parse_window_title_info(app_id, raw_title)
@@ -1038,10 +1115,12 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
             g["clicks"] += r["clicks"]
 
             if clean_t not in g["pages"]:
+                url = infer_web_url(app_id, raw_t, clean_t, sub_link, grp_name)
                 g["pages"][clean_t] = {
                     "clean_title": clean_t,
                     "raw_title": raw_t,
                     "sub_link": sub_link,
+                    "url": url,
                     "duration": 0,
                     "keystrokes": 0,
                     "clicks": 0

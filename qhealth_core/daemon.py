@@ -7,7 +7,7 @@ import datetime
 import subprocess
 from pathlib import Path
 from .tracker import ActivityTracker
-from .db import init_db, is_paused_setting, get_stats_by_range, get_all_app_budgets
+from .db import init_db, is_paused_setting, get_stats_by_range, get_all_app_budgets, vacuum_and_cleanup_db
 
 STATE_DIR = Path.home() / ".local" / "share" / "qhealth"
 STATE_FILE = STATE_DIR / "live_state.json"
@@ -59,6 +59,12 @@ class QHealthDaemon:
                         today_stats = get_stats_by_range("day")
                         today_dur = today_stats.get("total_duration", 0)
                         self._check_budget_limits(today_stats)
+                    except Exception:
+                        pass
+
+                if loop_count % 3600 == 0 and loop_count > 0:
+                    try:
+                        vacuum_and_cleanup_db()
                     except Exception:
                         pass
 

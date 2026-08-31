@@ -1,10 +1,10 @@
 from typing import Dict, Any, Callable, List, Optional
 from datetime import datetime
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import Qt, QRectF, QUrl
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QProgressBar, QToolTip, QSizePolicy, QScrollArea
 )
-from PyQt6.QtGui import QPainter, QColor, QFont, QBrush, QLinearGradient
+from PyQt6.QtGui import QPainter, QColor, QFont, QBrush, QLinearGradient, QDesktopServices
 from qhealth_core.db import set_app_budget
 from ..utils import format_duration, format_number, get_app_icon_pixmap
 
@@ -211,7 +211,26 @@ class PageRowWidget(QFrame):
             p_top.addWidget(p_pct_lbl)
             p_box_lay.addLayout(p_top)
 
-            if p_sub and p_sub not in ("web", "app", "editor") and p_sub != self.group_name:
+            p_url = p_info.get("url", "")
+            if p_url:
+                p_url_lbl = QLabel(f"🔗 {p_url}")
+                p_url_lbl.setStyleSheet("""
+                    QLabel {
+                        color: #38bdf8;
+                        font-size: 10px;
+                        font-family: monospace;
+                        text-decoration: underline;
+                    }
+                    QLabel:hover {
+                        color: #7dd3fc;
+                    }
+                """)
+                p_url_lbl.setWordWrap(True)
+                p_url_lbl.setToolTip(f"Click to open link in browser:\n{p_url}")
+                p_url_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+                p_url_lbl.mousePressEvent = lambda ev, u=p_url: QDesktopServices.openUrl(QUrl(u))
+                p_box_lay.addWidget(p_url_lbl)
+            elif p_sub and p_sub not in ("web", "app", "editor") and p_sub != self.group_name:
                 p_link_lbl = QLabel(f"🔗 {p_sub}")
                 p_link_lbl.setStyleSheet("color: #64748b; font-size: 10px; font-family: monospace;")
                 p_link_lbl.setWordWrap(True)
@@ -414,6 +433,22 @@ class AppDetailView(QWidget):
         back_bar.addWidget(self.btn_back)
         back_bar.addStretch()
         root_lay.addLayout(back_bar)
+
+        self.loading_bar = QProgressBar(self)
+        self.loading_bar.setFixedHeight(2)
+        self.loading_bar.setTextVisible(False)
+        self.loading_bar.setRange(0, 0)
+        self.loading_bar.setStyleSheet("""
+            QProgressBar {
+                background: transparent;
+                border: none;
+            }
+            QProgressBar::chunk {
+                background-color: #38bdf8;
+            }
+        """)
+        self.loading_bar.setVisible(False)
+        root_lay.addWidget(self.loading_bar)
 
         # 2. Scrollable Body Container (Prevents any widget squeezing)
         self.scroll_area = QScrollArea(self)
@@ -635,7 +670,11 @@ class AppDetailView(QWidget):
             self.budget_bar.setValue(0)
             self.budget_status_lbl.setText("No daily budget set for this app.")
 
+    def show_loading(self):
+        self.loading_bar.setVisible(True)
+
     def set_app_data(self, data: Dict[str, Any], range_type: str = "day"):
+        self.loading_bar.setVisible(False)
         app_name = data.get("display_name", "Unknown")
         icon_name = data.get("icon", "")
         app_id = data.get("app_id", "")

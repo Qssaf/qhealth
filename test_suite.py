@@ -135,6 +135,14 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(chess_grp, "chess.com")
         self.assertEqual(chess_ico, "♟️")
 
+        url_gh = db.infer_web_url("firefox", "GitHub - Qssaf/qhealth: Digital Wellbeing — Mozilla Firefox", "Qssaf/qhealth", "github.com", "github.com")
+        self.assertEqual(url_gh, "https://github.com/Qssaf/qhealth")
+
+        url_chess = db.infer_web_url("brave-browser", "Play Chess Online - Chess.com - Brave", "Play Chess Online", "chess.com", "chess.com")
+        self.assertEqual(url_chess, "https://chess.com/play/online")
+
+        db.vacuum_and_cleanup_db()
+
         # Test week range
         detail_week = db.get_app_detail_stats("vesktop", "week")
         self.assertEqual(len(detail_week["timeline"]), 7) # 7 days
