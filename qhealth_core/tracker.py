@@ -257,6 +257,9 @@ class ActivityTracker:
         if (workspace.activeWindowChanged) {
             workspace.activeWindowChanged.connect(report);
         }
+        if (workspace.windowCaptionChanged) {
+            workspace.windowCaptionChanged.connect(report);
+        }
         if (workspace.windowRemoved) {
             workspace.windowRemoved.connect(report);
         }

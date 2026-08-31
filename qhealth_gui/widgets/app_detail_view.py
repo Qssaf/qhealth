@@ -1,6 +1,6 @@
 from typing import Dict, Any, Callable, List, Optional
 from datetime import datetime
-from PyQt6.QtCore import Qt, QRectF, pyqtSignal
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QProgressBar, QToolTip, QSizePolicy
 )
@@ -34,6 +34,72 @@ BUDGET_PRESETS = [
     (240, "4 Hours / Day"),
     (300, "5 Hours / Day")
 ]
+
+class PageRowWidget(QFrame):
+    def __init__(self, page_data: Dict[str, Any], parent=None):
+        super().__init__(parent)
+        self.setProperty("class", "GlassCardInner")
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 7, 12, 7)
+        lay.setSpacing(12)
+
+        # Left: Clean title
+        clean_title = page_data.get("clean_title") or page_data.get("raw_title", "Unknown Page")
+        raw_title = page_data.get("raw_title", clean_title)
+
+        title_box = QVBoxLayout()
+        title_box.setSpacing(1)
+        t_lbl = QLabel(clean_title)
+        t_lbl.setStyleSheet("color: #f1f5f9; font-size: 12px; font-weight: 600;")
+        t_lbl.setToolTip(raw_title)
+        title_box.addWidget(t_lbl)
+        lay.addLayout(title_box, 3)
+
+        # Center: Percentage progress bar
+        pct = page_data.get("percentage", 0.0)
+        p_bar = QProgressBar()
+        p_bar.setFixedHeight(4)
+        p_bar.setTextVisible(False)
+        p_bar.setMaximum(100)
+        p_bar.setValue(max(1, int(pct)) if page_data.get("duration", 0) > 0 else 0)
+        p_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: rgba(30, 41, 59, 0.6);
+                border: none;
+                border-radius: 2px;
+            }
+            QProgressBar::chunk {
+                background-color: #22d3ee;
+                border-radius: 2px;
+            }
+        """)
+        lay.addWidget(p_bar, 2)
+
+        # Right: Stats (Keys, Clicks, Duration)
+        stats_box = QHBoxLayout()
+        stats_box.setSpacing(12)
+
+        keys = page_data.get("keystrokes", 0)
+        clicks = page_data.get("clicks", 0)
+        if keys > 0 or clicks > 0:
+            k_lbl = QLabel(f"⌨ {format_number(keys)} · 🖱 {format_number(clicks)}")
+            k_lbl.setStyleSheet("font-size: 10px; color: #64748b; font-family: monospace;")
+            stats_box.addWidget(k_lbl)
+
+        dur_lbl = QLabel(format_duration(page_data.get("duration", 0)))
+        dur_lbl.setStyleSheet("font-size: 12px; font-weight: 700; color: #34d399; font-family: monospace;")
+        dur_lbl.setMinimumWidth(55)
+        dur_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        stats_box.addWidget(dur_lbl)
+
+        pct_lbl = QLabel(f"({pct}%)")
+        pct_lbl.setStyleSheet("font-size: 10px; color: #64748b; font-family: monospace;")
+        pct_lbl.setMinimumWidth(40)
+        stats_box.addWidget(pct_lbl)
+
+        lay.addLayout(stats_box)
+
 
 class AppTrendBarsPainter(QWidget):
     def __init__(self, parent=None):
@@ -153,6 +219,7 @@ class AppDetailView(QWidget):
         super().__init__(parent)
         self.on_back = on_back
         self.current_app_id = ""
+        self._last_duration = 0
         self._is_updating = False
 
         main_lay = QVBoxLayout(self)
@@ -207,7 +274,7 @@ class AppDetailView(QWidget):
 
         main_lay.addWidget(self.hero_card)
 
-        # 3. Daily Usage Budget Card (Feature A)
+        # 3. Daily Usage Budget Card
         self.budget_card = QFrame()
         self.budget_card.setProperty("class", "GlassCard")
         b_lay = QVBoxLayout(self.budget_card)
@@ -327,19 +394,27 @@ class AppDetailView(QWidget):
         tr_lay.addWidget(self.trend_painter)
         main_lay.addWidget(trend_card)
 
-        # 6. Recent Window Titles
-        self.titles_card = QFrame()
-        self.titles_card.setProperty("class", "GlassCard")
-        self.titles_lay = QVBoxLayout(self.titles_card)
-        self.titles_lay.setContentsMargins(18, 14, 18, 14)
-        self.titles_lay.setSpacing(6)
-        t_hdr = QLabel("RECENT WINDOW TITLES & TASKS")
-        t_hdr.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px;")
-        self.titles_lay.addWidget(t_hdr)
-        self.titles_box = QVBoxLayout()
-        self.titles_box.setSpacing(4)
-        self.titles_lay.addLayout(self.titles_box)
-        main_lay.addWidget(self.titles_card)
+        # 6. Websites / Channels / Pages Breakdown Card
+        self.pages_card = QFrame()
+        self.pages_card.setProperty("class", "GlassCard")
+        self.pages_lay = QVBoxLayout(self.pages_card)
+        self.pages_lay.setContentsMargins(18, 14, 18, 14)
+        self.pages_lay.setSpacing(8)
+        
+        p_hdr_row = QHBoxLayout()
+        self.pages_hdr_lbl = QLabel("WEBSITES, CHANNELS & TABS BREAKDOWN")
+        self.pages_hdr_lbl.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px;")
+        self.pages_count_lbl = QLabel("0 items")
+        self.pages_count_lbl.setStyleSheet("font-size: 10px; color: #64748b; font-family: monospace;")
+        p_hdr_row.addWidget(self.pages_hdr_lbl)
+        p_hdr_row.addStretch()
+        p_hdr_row.addWidget(self.pages_count_lbl)
+        self.pages_lay.addLayout(p_hdr_row)
+
+        self.pages_box = QVBoxLayout()
+        self.pages_box.setSpacing(5)
+        self.pages_lay.addLayout(self.pages_box)
+        main_lay.addWidget(self.pages_card)
 
     def _on_budget_changed(self, idx: int):
         if self._is_updating or not self.current_app_id:
@@ -410,24 +485,20 @@ class AppDetailView(QWidget):
         # Trend bars
         self.trend_painter.set_data(data.get("timeline", []), range_type)
 
-        # Recent titles
-        while self.titles_box.count():
-            item = self.titles_box.takeAt(0)
+        # Pages / Websites / Channels Breakdown
+        while self.pages_box.count():
+            item = self.pages_box.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        titles = data.get("recent_titles", [])
-        if not titles:
-            lbl = QLabel("No window titles logged in this time range")
-            lbl.setStyleSheet("color: #64748b; font-size: 11px; font-style: italic; padding: 4px;")
-            self.titles_box.addWidget(lbl)
+        pages = data.get("pages_breakdown", [])
+        self.pages_count_lbl.setText(f"{len(pages)} item{'s' if len(pages) != 1 else ''}")
+
+        if not pages:
+            lbl = QLabel("No detailed window tabs or channels recorded in this time range.")
+            lbl.setStyleSheet("color: #64748b; font-size: 11px; font-style: italic; padding: 10px;")
+            self.pages_box.addWidget(lbl)
         else:
-            for t in titles[:6]:
-                row = QFrame()
-                row.setProperty("class", "GlassCardInner")
-                r_lay = QHBoxLayout(row)
-                r_lay.setContentsMargins(10, 5, 10, 5)
-                t_lbl = QLabel(t)
-                t_lbl.setStyleSheet("color: #cbd5e1; font-size: 11px; font-family: monospace;")
-                r_lay.addWidget(t_lbl)
-                self.titles_box.addWidget(row)
+            for p in pages:
+                row = PageRowWidget(p, parent=self.pages_card)
+                self.pages_box.addWidget(row)

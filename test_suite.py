@@ -105,16 +105,23 @@ class TestDatabase(unittest.TestCase):
         self.assertTrue(0 <= today_item["level"] <= 4)
 
     def test_app_detail_stats(self):
-        db.record_activity_chunk("vesktop", "Vesktop", "#general - Discord", 240, 600, 150, 10)
+        db.record_activity_chunk("vesktop", "Vesktop", "(1) Discord | #general | OpenCode", 240, 600, 150, 10)
         # Test day range
         detail_day = db.get_app_detail_stats("vesktop", "day")
         self.assertEqual(detail_day["display_name"], "Vesktop")
-        self.assertEqual(detail_day["category"], "Communication")
         self.assertEqual(detail_day["total_duration"], 240)
         self.assertEqual(detail_day["total_keystrokes"], 600)
         self.assertEqual(detail_day["total_clicks"], 150)
-        self.assertIn("#general - Discord", detail_day["recent_titles"])
+        self.assertTrue(len(detail_day["pages_breakdown"]) >= 1)
+        self.assertEqual(detail_day["pages_breakdown"][0]["clean_title"], "#general (OpenCode)")
         self.assertEqual(len(detail_day["timeline"]), 24) # 24 hours
+
+        # Test title cleaning
+        clean_yt = db.clean_window_title("brave-browser", "YouTube - Lofi Hip Hop Stream - Brave")
+        self.assertEqual(clean_yt, "YouTube - Lofi Hip Hop Stream")
+
+        clean_gh = db.clean_window_title("firefox", "GitHub - Qssaf/qhealth: Digital Wellbeing — Mozilla Firefox")
+        self.assertEqual(clean_gh, "GitHub - Qssaf/qhealth: Digital Wellbeing")
 
         # Test week range
         detail_week = db.get_app_detail_stats("vesktop", "week")

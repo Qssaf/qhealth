@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import datetime
 from pathlib import Path
@@ -715,9 +716,50 @@ def get_activity_heatmap_data(days: int = 70) -> List[Dict[str, Any]]:
 
     return heatmap
 
+def clean_window_title(app_id: str, raw_title: str) -> str:
+    """Parses and cleans tab/website/channel titles for browsers, discord, and editors."""
+    if not raw_title:
+        return ""
+
+    title = raw_title.strip()
+    a_lower = app_id.lower()
+
+    # Remove notification badges e.g. "(1) ", "(99+) ", "• "
+    title = re.sub(r"^\(\d+\+?\)\s*", "", title)
+    title = re.sub(r"^[•\*\s]+", "", title)
+
+    # 1. Browsers
+    if any(b in a_lower for b in ["brave", "firefox", "chrome", "chromium", "zen", "opera", "vivaldi", "edge"]):
+        for suffix in [
+            " - Brave", " — Mozilla Firefox", " - Google Chrome", " - Chromium",
+            " - Zen Browser", " - Opera", " - Vivaldi", " - Microsoft Edge"
+        ]:
+            if title.endswith(suffix):
+                title = title[:-len(suffix)].strip()
+
+    # 2. Discord / Vesktop
+    elif "discord" in a_lower or "vesktop" in a_lower:
+        parts = [p.strip() for p in title.split("|")]
+        if len(parts) >= 3:
+            channel = parts[1]
+            server = parts[2]
+            title = f"{channel} ({server})"
+        elif len(parts) == 2:
+            title = parts[1]
+        elif title.startswith("Discord"):
+            title = title[7:].strip(" -|")
+
+    # 3. Code editors (VS Code / OpenCode / Kate / Zed)
+    elif any(e in a_lower for e in ["code", "opencode", "kate", "zed", "sublime", "idea", "pycharm"]):
+        for suffix in [" - Visual Studio Code", " - VSCodium", " — OpenCode", " — Kate", " - Zed"]:
+            if title.endswith(suffix):
+                title = title[:-len(suffix)].strip()
+
+    return title if title else raw_title
+
 def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Optional[str] = None) -> Dict[str, Any]:
     """
-    Returns specific drilldown metrics, range-adjusted timeline, and recent activity for an application.
+    Returns specific drilldown metrics, range-adjusted timeline, and detailed per-page/website/channel breakdown.
     """
     init_db()
     today = datetime.date.today()
@@ -857,23 +899,48 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
                     "clicks": entry["clicks"]
                 })
 
-        # 3. Recent distinct window titles for this app in this range
+        # 3. Per-page / website / channel breakdown
         cursor.execute(f"""
-        SELECT DISTINCT window_title
+        SELECT 
+            window_title,
+            SUM(duration_seconds) as duration,
+            SUM(keystrokes) as keystrokes,
+            SUM(clicks) as clicks
         FROM activity_log
-        WHERE (app_id = ? OR app_name = ?) AND {date_condition} AND window_title IS NOT NULL AND window_title != ''
-        ORDER BY id DESC
-        LIMIT 10
+        WHERE (app_id = ? OR app_name = ?) AND {date_condition} 
+          AND window_title IS NOT NULL AND window_title != ''
+        GROUP BY window_title
+        ORDER BY duration DESC
+        LIMIT 25
         """, [app_id, app_id] + params)
-        recent_titles = [r["window_title"] for r in cursor.fetchall()]
+        page_rows = cursor.fetchall()
+        
+        pages_breakdown = []
+        tot_app_dur = summary["total_duration"]
+        for r in page_rows:
+            raw_t = r["window_title"]
+            clean_t = clean_window_title(app_id, raw_t)
+            dur = r["duration"]
+            pct = round((dur / tot_app_dur * 100), 1) if tot_app_dur > 0 else 0.0
+            pages_breakdown.append({
+                "raw_title": raw_t,
+                "clean_title": clean_t,
+                "duration": dur,
+                "percentage": pct,
+                "keystrokes": r["keystrokes"],
+                "clicks": r["clicks"]
+            })
+
+        recent_titles = [r["clean_title"] for r in pages_breakdown]
 
     info = app_resolver.resolve(summary.get("app_id", app_id), summary.get("app_name", ""))
     summary["display_name"] = info["display_name"]
     summary["icon"] = info["icon"]
     summary["category"] = info["category"]
     summary["timeline"] = timeline
-    summary["daily_history"] = timeline # backwards-compat alias
+    summary["daily_history"] = timeline
     summary["recent_titles"] = recent_titles
+    summary["pages_breakdown"] = pages_breakdown
     summary["range_type"] = range_type
     summary["budget"] = get_app_budget(app_id)
 
