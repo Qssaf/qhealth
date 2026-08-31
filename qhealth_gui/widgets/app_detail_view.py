@@ -2,7 +2,7 @@ from typing import Dict, Any, Callable, List, Optional
 from datetime import datetime
 from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtWidgets import (
-    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QProgressBar, QToolTip, QSizePolicy
+    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QProgressBar, QToolTip, QSizePolicy, QScrollArea
 )
 from PyQt6.QtGui import QPainter, QColor, QFont, QBrush, QLinearGradient
 from qhealth_core.db import set_app_budget
@@ -39,6 +39,7 @@ class PageRowWidget(QFrame):
     def __init__(self, page_data: Dict[str, Any], parent=None):
         super().__init__(parent)
         self.setProperty("class", "GlassCardInner")
+        self.setMinimumHeight(60)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 14, 10)
@@ -221,11 +222,11 @@ class AppDetailView(QWidget):
         self._last_duration = 0
         self._is_updating = False
 
-        main_lay = QVBoxLayout(self)
-        main_lay.setContentsMargins(0, 0, 0, 0)
-        main_lay.setSpacing(12)
+        root_lay = QVBoxLayout(self)
+        root_lay.setContentsMargins(0, 0, 0, 0)
+        root_lay.setSpacing(10)
 
-        # 1. Back Button Bar
+        # 1. Back Button Bar (Fixed at top)
         back_bar = QHBoxLayout()
         self.btn_back = QPushButton("← Back to Applications")
         self.btn_back.setProperty("class", "ActionBtn")
@@ -233,9 +234,20 @@ class AppDetailView(QWidget):
         self.btn_back.clicked.connect(self.on_back)
         back_bar.addWidget(self.btn_back)
         back_bar.addStretch()
-        main_lay.addLayout(back_bar)
+        root_lay.addLayout(back_bar)
 
-        # 2. Hero Header Card
+        # 2. Scrollable Body Container (Prevents any widget squeezing)
+        self.scroll_area = QScrollArea(self)
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_content = QWidget()
+        self.scroll_content.setStyleSheet("background: transparent;")
+        main_lay = QVBoxLayout(self.scroll_content)
+        main_lay.setContentsMargins(0, 0, 8, 0)
+        main_lay.setSpacing(12)
+        self.scroll_area.setWidget(self.scroll_content)
+        root_lay.addWidget(self.scroll_area, 1)
+
+        # Hero Header Card
         self.hero_card = QFrame()
         self.hero_card.setProperty("class", "GlassCard")
         hero_lay = QHBoxLayout(self.hero_card)
@@ -273,7 +285,7 @@ class AppDetailView(QWidget):
 
         main_lay.addWidget(self.hero_card)
 
-        # 3. Daily Usage Budget Card
+        # Daily Usage Budget Card
         self.budget_card = QFrame()
         self.budget_card.setProperty("class", "GlassCard")
         b_lay = QVBoxLayout(self.budget_card)
@@ -310,7 +322,6 @@ class AppDetailView(QWidget):
         b_top.addWidget(self.budget_combo)
         b_lay.addLayout(b_top)
 
-        # Progress bar for budget
         self.budget_progress_box = QVBoxLayout()
         self.budget_progress_box.setSpacing(3)
         self.budget_status_lbl = QLabel("No daily limit set")
@@ -338,7 +349,7 @@ class AppDetailView(QWidget):
 
         main_lay.addWidget(self.budget_card)
 
-        # 4. Stats Row (Keys, Clicks, Active Days)
+        # Stats Row (Keys, Clicks, Active Days)
         stats_row = QHBoxLayout()
         stats_row.setSpacing(12)
 
@@ -380,7 +391,7 @@ class AppDetailView(QWidget):
 
         main_lay.addLayout(stats_row)
 
-        # 5. Usage Trend
+        # Usage Trend
         trend_card = QFrame()
         trend_card.setProperty("class", "GlassCard")
         tr_lay = QVBoxLayout(trend_card)
@@ -393,7 +404,7 @@ class AppDetailView(QWidget):
         tr_lay.addWidget(self.trend_painter)
         main_lay.addWidget(trend_card)
 
-        # 6. Websites / Channels / Pages Breakdown Card
+        # Websites / Channels / Pages Breakdown Card
         self.pages_card = QFrame()
         self.pages_card.setProperty("class", "GlassCard")
         self.pages_lay = QVBoxLayout(self.pages_card)
@@ -411,7 +422,7 @@ class AppDetailView(QWidget):
         self.pages_lay.addLayout(p_hdr_row)
 
         self.pages_box = QVBoxLayout()
-        self.pages_box.setSpacing(5)
+        self.pages_box.setSpacing(6)
         self.pages_lay.addLayout(self.pages_box)
         main_lay.addWidget(self.pages_card)
 
