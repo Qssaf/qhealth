@@ -118,10 +118,10 @@ class TestDatabase(unittest.TestCase):
 
         # Test title cleaning
         clean_yt = db.clean_window_title("brave-browser", "YouTube - Lofi Hip Hop Stream - Brave")
-        self.assertEqual(clean_yt, "YouTube - Lofi Hip Hop Stream")
+        self.assertEqual(clean_yt, "YouTube: Lofi Hip Hop Stream")
 
         clean_gh = db.clean_window_title("firefox", "GitHub - Qssaf/qhealth: Digital Wellbeing — Mozilla Firefox")
-        self.assertEqual(clean_gh, "GitHub - Qssaf/qhealth: Digital Wellbeing")
+        self.assertEqual(clean_gh, "GitHub: Qssaf/qhealth: Digital Wellbeing")
 
         # Test week range
         detail_week = db.get_app_detail_stats("vesktop", "week")

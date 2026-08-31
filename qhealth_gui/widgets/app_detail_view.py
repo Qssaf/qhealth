@@ -40,29 +40,43 @@ class PageRowWidget(QFrame):
         super().__init__(parent)
         self.setProperty("class", "GlassCardInner")
 
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 7, 12, 7)
-        lay.setSpacing(12)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(6)
 
-        # Left: Clean title
         clean_title = page_data.get("clean_title") or page_data.get("raw_title", "Unknown Page")
         raw_title = page_data.get("raw_title", clean_title)
-
-        title_box = QVBoxLayout()
-        title_box.setSpacing(1)
-        t_lbl = QLabel(clean_title)
-        t_lbl.setStyleSheet("color: #f1f5f9; font-size: 12px; font-weight: 600;")
-        t_lbl.setToolTip(raw_title)
-        title_box.addWidget(t_lbl)
-        lay.addLayout(title_box, 3)
-
-        # Center: Percentage progress bar
+        dur = page_data.get("duration", 0)
         pct = page_data.get("percentage", 0.0)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(12)
+
+        t_lbl = QLabel(clean_title)
+        t_lbl.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: 700;")
+        t_lbl.setToolTip(raw_title)
+        top_row.addWidget(t_lbl, 1)
+
+        dur_box = QHBoxLayout()
+        dur_box.setSpacing(6)
+        dur_lbl = QLabel(format_duration(dur))
+        dur_lbl.setStyleSheet("font-size: 13px; font-weight: 800; color: #34d399; font-family: monospace;")
+        
+        pct_lbl = QLabel(f"({pct}%)")
+        pct_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #64748b; font-family: monospace;")
+        dur_box.addWidget(dur_lbl)
+        dur_box.addWidget(pct_lbl)
+        top_row.addLayout(dur_box)
+        lay.addLayout(top_row)
+
+        bot_row = QHBoxLayout()
+        bot_row.setSpacing(12)
+
         p_bar = QProgressBar()
-        p_bar.setFixedHeight(4)
+        p_bar.setFixedHeight(5)
         p_bar.setTextVisible(False)
         p_bar.setMaximum(100)
-        p_bar.setValue(max(1, int(pct)) if page_data.get("duration", 0) > 0 else 0)
+        p_bar.setValue(max(1, int(pct)) if dur > 0 else 0)
         p_bar.setStyleSheet("""
             QProgressBar {
                 background-color: rgba(30, 41, 59, 0.6);
@@ -74,31 +88,16 @@ class PageRowWidget(QFrame):
                 border-radius: 2px;
             }
         """)
-        lay.addWidget(p_bar, 2)
-
-        # Right: Stats (Keys, Clicks, Duration)
-        stats_box = QHBoxLayout()
-        stats_box.setSpacing(12)
+        bot_row.addWidget(p_bar, 1)
 
         keys = page_data.get("keystrokes", 0)
         clicks = page_data.get("clicks", 0)
         if keys > 0 or clicks > 0:
             k_lbl = QLabel(f"⌨ {format_number(keys)} · 🖱 {format_number(clicks)}")
-            k_lbl.setStyleSheet("font-size: 10px; color: #64748b; font-family: monospace;")
-            stats_box.addWidget(k_lbl)
+            k_lbl.setStyleSheet("font-size: 10px; color: #94a3b8; font-family: monospace;")
+            bot_row.addWidget(k_lbl)
 
-        dur_lbl = QLabel(format_duration(page_data.get("duration", 0)))
-        dur_lbl.setStyleSheet("font-size: 12px; font-weight: 700; color: #34d399; font-family: monospace;")
-        dur_lbl.setMinimumWidth(55)
-        dur_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        stats_box.addWidget(dur_lbl)
-
-        pct_lbl = QLabel(f"({pct}%)")
-        pct_lbl.setStyleSheet("font-size: 10px; color: #64748b; font-family: monospace;")
-        pct_lbl.setMinimumWidth(40)
-        stats_box.addWidget(pct_lbl)
-
-        lay.addLayout(stats_box)
+        lay.addLayout(bot_row)
 
 
 class AppTrendBarsPainter(QWidget):

@@ -717,19 +717,28 @@ def get_activity_heatmap_data(days: int = 70) -> List[Dict[str, Any]]:
     return heatmap
 
 def clean_window_title(app_id: str, raw_title: str) -> str:
-    """Parses and cleans tab/website/channel titles for browsers, discord, and editors."""
     if not raw_title:
         return ""
 
     title = raw_title.strip()
     a_lower = app_id.lower()
 
-    # Remove notification badges e.g. "(1) ", "(99+) ", "• "
-    title = re.sub(r"^\(\d+\+?\)\s*", "", title)
-    title = re.sub(r"^[•\*\s]+", "", title)
+    title = re.sub(r"^[\(\[\{]\d+\+?[\)\]\}]\s*", "", title)
+    title = re.sub(r"^[•\*\s\-_]+", "", title)
 
-    # 1. Browsers
-    if any(b in a_lower for b in ["brave", "firefox", "chrome", "chromium", "zen", "opera", "vivaldi", "edge"]):
+    if "discord" in a_lower or "vesktop" in a_lower:
+        parts = [p.strip() for p in title.split("|")]
+        if len(parts) >= 3:
+            channel = parts[1].strip("•* ")
+            server = parts[2].strip("•* ")
+            return f"{channel} ({server})"
+        elif len(parts) == 2:
+            return parts[1].strip("•* ")
+        elif title.startswith("Discord"):
+            title = title[7:].strip(" -|•*")
+            return title if title else "Discord"
+
+    elif any(b in a_lower for b in ["brave", "firefox", "chrome", "chromium", "zen", "opera", "vivaldi", "edge"]):
         for suffix in [
             " - Brave", " — Mozilla Firefox", " - Google Chrome", " - Chromium",
             " - Zen Browser", " - Opera", " - Vivaldi", " - Microsoft Edge"
@@ -737,19 +746,22 @@ def clean_window_title(app_id: str, raw_title: str) -> str:
             if title.endswith(suffix):
                 title = title[:-len(suffix)].strip()
 
-    # 2. Discord / Vesktop
-    elif "discord" in a_lower or "vesktop" in a_lower:
-        parts = [p.strip() for p in title.split("|")]
-        if len(parts) >= 3:
-            channel = parts[1]
-            server = parts[2]
-            title = f"{channel} ({server})"
-        elif len(parts) == 2:
-            title = parts[1]
-        elif title.startswith("Discord"):
-            title = title[7:].strip(" -|")
+        if "Chess.com" in title:
+            return "Chess.com"
+        if "YouTube" in title:
+            clean_yt = title.replace(" - YouTube", "").replace("YouTube - ", "").strip()
+            return f"YouTube: {clean_yt}" if clean_yt else "YouTube"
+        if "WhatsApp" in title:
+            return "WhatsApp Web"
+        if "GitHub" in title:
+            clean_gh = title.replace(" - GitHub", "").replace("GitHub - ", "").strip()
+            return f"GitHub: {clean_gh}" if clean_gh else "GitHub"
+        if "Reddit" in title:
+            clean_rd = title.replace(" - Reddit", "").replace("Reddit - ", "").strip()
+            return f"Reddit: {clean_rd}" if clean_rd else "Reddit"
+        if "ChatGPT" in title:
+            return "ChatGPT"
 
-    # 3. Code editors (VS Code / OpenCode / Kate / Zed)
     elif any(e in a_lower for e in ["code", "opencode", "kate", "zed", "sublime", "idea", "pycharm"]):
         for suffix in [" - Visual Studio Code", " - VSCodium", " — OpenCode", " — Kate", " - Zed"]:
             if title.endswith(suffix):
@@ -911,25 +923,35 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
           AND window_title IS NOT NULL AND window_title != ''
         GROUP BY window_title
         ORDER BY duration DESC
-        LIMIT 25
+        LIMIT 60
         """, [app_id, app_id] + params)
         page_rows = cursor.fetchall()
         
-        pages_breakdown = []
+        consolidated = {}
         tot_app_dur = summary["total_duration"]
         for r in page_rows:
             raw_t = r["window_title"]
             clean_t = clean_window_title(app_id, raw_t)
-            dur = r["duration"]
-            pct = round((dur / tot_app_dur * 100), 1) if tot_app_dur > 0 else 0.0
-            pages_breakdown.append({
-                "raw_title": raw_t,
-                "clean_title": clean_t,
-                "duration": dur,
-                "percentage": pct,
-                "keystrokes": r["keystrokes"],
-                "clicks": r["clicks"]
-            })
+            if not clean_t:
+                continue
+            if clean_t not in consolidated:
+                consolidated[clean_t] = {
+                    "raw_title": raw_t,
+                    "clean_title": clean_t,
+                    "duration": 0,
+                    "keystrokes": 0,
+                    "clicks": 0
+                }
+            consolidated[clean_t]["duration"] += r["duration"]
+            consolidated[clean_t]["keystrokes"] += r["keystrokes"]
+            consolidated[clean_t]["clicks"] += r["clicks"]
+
+        sorted_pages = sorted(consolidated.values(), key=lambda p: p["duration"], reverse=True)
+        pages_breakdown = []
+        for p in sorted_pages[:30]:
+            dur = p["duration"]
+            p["percentage"] = round((dur / tot_app_dur * 100), 1) if tot_app_dur > 0 else 0.0
+            pages_breakdown.append(p)
 
         recent_titles = [r["clean_title"] for r in pages_breakdown]
 
