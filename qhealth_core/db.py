@@ -717,62 +717,74 @@ def get_activity_heatmap_data(days: int = 70) -> List[Dict[str, Any]]:
     return heatmap
 
 KNOWN_SITES = {
-    "youtube": ("YouTube", "youtube.com"),
-    "github": ("GitHub", "github.com"),
-    "reddit": ("Reddit", "reddit.com"),
-    "chess.com": ("Chess.com", "chess.com"),
-    "twitter": ("X / Twitter", "x.com"),
-    "x.com": ("X", "x.com"),
-    "instagram": ("Instagram", "instagram.com"),
-    "chatgpt": ("ChatGPT", "chatgpt.com"),
-    "wikipedia": ("Wikipedia", "wikipedia.org"),
-    "twitch": ("Twitch", "twitch.tv"),
-    "stackoverflow": ("Stack Overflow", "stackoverflow.com"),
-    "stackexchange": ("Stack Exchange", "stackexchange.com"),
-    "google search": ("Google Search", "google.com"),
-    "duckduckgo": ("DuckDuckGo", "duckduckgo.com"),
-    "whatsapp": ("WhatsApp Web", "web.whatsapp.com"),
-    "notion": ("Notion", "notion.so"),
-    "figma": ("Figma", "figma.com"),
-    "spotify": ("Spotify", "open.spotify.com"),
-    "gitlab": ("GitLab", "gitlab.com"),
-    "archwiki": ("ArchWiki", "wiki.archlinux.org"),
-    "arch wiki": ("ArchWiki", "wiki.archlinux.org"),
-    "kernel.org": ("Kernel Docs", "kernel.org"),
-    "opencode": ("OpenCode", "opencode.ai"),
+    "youtube": ("YouTube", "youtube.com", "▶️"),
+    "github": ("GitHub", "github.com", "🐙"),
+    "reddit": ("Reddit", "reddit.com", "🤖"),
+    "chess.com": ("Chess.com", "chess.com", "♟️"),
+    "twitter": ("X / Twitter", "x.com", "🐦"),
+    "x.com": ("X", "x.com", "🐦"),
+    "instagram": ("Instagram", "instagram.com", "📷"),
+    "chatgpt": ("ChatGPT", "chatgpt.com", "🧠"),
+    "wikipedia": ("Wikipedia", "wikipedia.org", "📚"),
+    "twitch": ("Twitch", "twitch.tv", "🟣"),
+    "stackoverflow": ("Stack Overflow", "stackoverflow.com", "💻"),
+    "stackexchange": ("Stack Exchange", "stackexchange.com", "💻"),
+    "google search": ("Google Search", "google.com", "🔍"),
+    "duckduckgo": ("DuckDuckGo", "duckduckgo.com", "🦆"),
+    "whatsapp": ("WhatsApp Web", "web.whatsapp.com", "💬"),
+    "notion": ("Notion", "notion.so", "📝"),
+    "figma": ("Figma", "figma.com", "🎨"),
+    "spotify": ("Spotify", "open.spotify.com", "🎵"),
+    "gitlab": ("GitLab", "gitlab.com", "🦊"),
+    "archwiki": ("ArchWiki", "wiki.archlinux.org", "🐧"),
+    "arch wiki": ("ArchWiki", "wiki.archlinux.org", "🐧"),
+    "kernel.org": ("Kernel Docs", "kernel.org", "🐧"),
+    "opencode": ("OpenCode", "opencode.ai", "⚡"),
 }
 
-def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str]:
+def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str, str, str]:
     if not raw_title:
-        return ("", "")
+        return ("", "", "Other", "📄")
 
     title = raw_title.strip()
     a_lower = (app_id or "").lower()
     sub_link = ""
+    group_name = ""
+    icon = "🌐"
 
     title = re.sub(r"^[\(\[\{]\d+\+?[\)\]\}]\s*", "", title)
     title = re.sub(r"^[•\*\s\-_]+", "", title)
 
     if "discord" in a_lower or "vesktop" in a_lower:
+        icon = "💬"
         parts = [p.strip() for p in title.split("|")]
         if len(parts) >= 3:
             channel = parts[1].strip("•* ")
             server = parts[2].strip("•* ")
-            title = f"{channel} ({server})"
-            sub_link = "discord.com"
+            title = channel
+            group_name = server
+            sub_link = f"discord.com · {server}"
         elif len(parts) == 2:
             p0 = parts[0].strip("•* ")
             p1 = parts[1].strip("•* ")
             if "direct message" in p1.lower() or "dms" in p1.lower():
-                title = f"@{p0} (DM)"
+                title = f"@{p0}"
+                group_name = "Direct Messages"
+                sub_link = "discord.com · DMs"
             else:
-                title = f"{p0} ({p1})"
-            sub_link = "discord.com"
+                title = p0
+                group_name = p1
+                sub_link = f"discord.com · {p1}"
         elif title.startswith("Discord"):
             title = title[7:].strip(" -|•*")
+            group_name = "Discord"
+            sub_link = "discord.com"
+        else:
+            group_name = "Discord"
             sub_link = "discord.com"
 
     elif any(b in a_lower for b in ["brave", "firefox", "chrome", "chromium", "zen", "opera", "vivaldi", "edge", "librewolf", "thorium"]):
+        icon = "🌐"
         for suffix in [
             " - Brave", " — Brave", " - Mozilla Firefox", " — Mozilla Firefox",
             " - Google Chrome", " — Google Chrome", " - Chromium", " — Chromium",
@@ -783,55 +795,36 @@ def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str]:
             if title.endswith(suffix):
                 title = title[:-len(suffix)].strip()
 
-        if "Chess.com" in title:
-            title = "Chess.com"
-            sub_link = "chess.com"
-        elif "YouTube" in title:
-            clean_yt = title.replace(" - YouTube", "").replace("YouTube - ", "").strip()
-            title = f"YouTube: {clean_yt}" if clean_yt else "YouTube"
-            sub_link = "youtube.com"
-        elif "WhatsApp" in title:
-            title = "WhatsApp Web"
-            sub_link = "web.whatsapp.com"
-        elif "GitHub" in title:
-            clean_gh = title.replace(" - GitHub", "").replace("GitHub - ", "").strip()
-            title = f"GitHub: {clean_gh}" if clean_gh else "GitHub"
-            sub_link = "github.com"
-        elif "Reddit" in title:
-            clean_rd = title.replace(" - Reddit", "").replace("Reddit - ", "").strip()
-            title = f"Reddit: {clean_rd}" if clean_rd else "Reddit"
-            sub_link = "reddit.com"
-        elif "Google Search" in title:
-            q = title.replace(" - Google Search", "").replace("Google Search - ", "").strip()
-            title = f"Google: {q}" if q else "Google Search"
-            sub_link = "google.com"
-        elif "DuckDuckGo" in title:
-            q = title.replace(" at DuckDuckGo", "").replace(" - DuckDuckGo", "").strip()
-            title = f"DuckDuckGo: {q}" if q else "DuckDuckGo"
-            sub_link = "duckduckgo.com"
-        elif "ChatGPT" in title:
-            title = "ChatGPT"
-            sub_link = "chatgpt.com"
-        else:
-            t_low = title.lower()
-            for k_key, (k_name, k_domain) in KNOWN_SITES.items():
-                if k_key in t_low:
-                    sub_link = k_domain
-                    break
+        t_low = title.lower()
+        for k_key, (k_name, k_domain, k_icon) in KNOWN_SITES.items():
+            if k_key in t_low:
+                sub_link = k_domain
+                group_name = k_domain
+                icon = k_icon
+                for sep in [" - ", " — ", " | "]:
+                    if f"{sep}{k_name}" in title:
+                        title = title.replace(f"{sep}{k_name}", "").strip()
+                    if f"{k_name}{sep}" in title:
+                        title = title.replace(f"{k_name}{sep}", "").strip()
+                if k_name in title and title != k_name:
+                    title = title.replace(k_name, "").strip(" -|—•")
+                break
 
-        if not sub_link:
+        if not group_name:
             domain_match = re.search(r"\b([a-zA-Z0-9-]+\.(?:com|org|net|io|dev|app|ai|me|cc|gg|tv|so|co|edu|gov|xyz|info))\b", title, re.IGNORECASE)
             if domain_match:
-                sub_link = domain_match.group(1).lower()
+                group_name = domain_match.group(1).lower()
+                sub_link = group_name
 
-        if not sub_link:
+        if not group_name:
             for sep in [" — ", " - ", " | "]:
                 if sep in title:
                     parts = [p.strip() for p in title.split(sep) if p.strip()]
                     if len(parts) >= 2:
                         last_part = parts[-1]
                         if len(last_part) <= 25 and not any(w in last_part.lower() for w in ["page", "tab", "window"]):
-                            sub_link = last_part.lower() if "." in last_part else last_part
+                            group_name = last_part.lower() if "." in last_part else last_part
+                            sub_link = group_name
                             title = sep.join(parts[:-1]).strip()
                             break
 
@@ -844,20 +837,27 @@ def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str]:
             if len(parts) == 2 and parts[0] == parts[1]:
                 title = parts[0]
 
-        if not sub_link:
+        if not group_name:
+            group_name = "Other Websites & Tabs"
             sub_link = "web"
 
     elif any(e in a_lower for e in ["code", "opencode", "kate", "zed", "sublime", "idea", "pycharm"]):
+        icon = "💻"
         for suffix in [" - Visual Studio Code", " — Visual Studio Code", " - VSCodium", " — VSCodium", " — OpenCode", " - OpenCode", " — Kate", " - Zed"]:
             if title.endswith(suffix):
                 title = title[:-len(suffix)].strip()
+        group_name = "Project Workspace"
         sub_link = "editor"
+    else:
+        icon = "📄"
+        group_name = "General"
+        sub_link = "app"
 
-    return (title if title else raw_title, sub_link)
+    return (title if title else raw_title, sub_link, group_name, icon)
 
 def clean_window_title(app_id: str, raw_title: str) -> str:
-    title, _ = parse_window_title_info(app_id, raw_title)
-    return title
+    res = parse_window_title_info(app_id, raw_title)
+    return res[0]
 
 def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Optional[str] = None) -> Dict[str, Any]:
     """
@@ -1017,35 +1017,57 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
         """, [app_id, app_id] + params)
         page_rows = cursor.fetchall()
         
-        consolidated = {}
+        domain_groups = {}
         tot_app_dur = summary["total_duration"]
         for r in page_rows:
             raw_t = r["window_title"]
-            clean_t, sub_link = parse_window_title_info(app_id, raw_t)
+            clean_t, sub_link, grp_name, icon = parse_window_title_info(app_id, raw_t)
             if not clean_t:
                 continue
-            key = (clean_t, sub_link)
-            if key not in consolidated:
-                consolidated[key] = {
-                    "raw_title": raw_t,
+            if grp_name not in domain_groups:
+                domain_groups[grp_name] = {
+                    "group_name": grp_name,
+                    "clean_title": grp_name,
+                    "icon": icon,
+                    "sub_link": sub_link,
+                    "duration": 0,
+                    "keystrokes": 0,
+                    "clicks": 0,
+                    "pages": {}
+                }
+            g = domain_groups[grp_name]
+            g["duration"] += r["duration"]
+            g["keystrokes"] += r["keystrokes"]
+            g["clicks"] += r["clicks"]
+
+            if clean_t not in g["pages"]:
+                g["pages"][clean_t] = {
                     "clean_title": clean_t,
+                    "raw_title": raw_t,
                     "sub_link": sub_link,
                     "duration": 0,
                     "keystrokes": 0,
                     "clicks": 0
                 }
-            consolidated[key]["duration"] += r["duration"]
-            consolidated[key]["keystrokes"] += r["keystrokes"]
-            consolidated[key]["clicks"] += r["clicks"]
+            g["pages"][clean_t]["duration"] += r["duration"]
+            g["pages"][clean_t]["keystrokes"] += r["keystrokes"]
+            g["pages"][clean_t]["clicks"] += r["clicks"]
 
-        sorted_pages = sorted(consolidated.values(), key=lambda p: p["duration"], reverse=True)
+        sorted_groups = sorted(domain_groups.values(), key=lambda g: g["duration"], reverse=True)
         pages_breakdown = []
-        for p in sorted_pages[:30]:
-            dur = p["duration"]
-            p["percentage"] = round((dur / tot_app_dur * 100), 1) if tot_app_dur > 0 else 0.0
-            pages_breakdown.append(p)
+        for g in sorted_groups:
+            g_dur = g["duration"]
+            g["percentage"] = round((g_dur / tot_app_dur * 100), 1) if tot_app_dur > 0 else 0.0
 
-        recent_titles = [r["clean_title"] for r in pages_breakdown]
+            sorted_sub_pages = sorted(g["pages"].values(), key=lambda p: p["duration"], reverse=True)
+            for p in sorted_sub_pages:
+                p["percentage"] = round((p["duration"] / g_dur * 100), 1) if g_dur > 0 else 0.0
+                p["app_percentage"] = round((p["duration"] / tot_app_dur * 100), 1) if tot_app_dur > 0 else 0.0
+            g["pages"] = sorted_sub_pages
+            g["page_count"] = len(sorted_sub_pages)
+            pages_breakdown.append(g)
+
+        recent_titles = [g["group_name"] for g in pages_breakdown]
 
     info = app_resolver.resolve(summary.get("app_id", app_id), summary.get("app_name", ""))
     summary["display_name"] = info["display_name"]

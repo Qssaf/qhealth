@@ -113,20 +113,27 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(detail_day["total_keystrokes"], 600)
         self.assertEqual(detail_day["total_clicks"], 150)
         self.assertTrue(len(detail_day["pages_breakdown"]) >= 1)
-        self.assertEqual(detail_day["pages_breakdown"][0]["clean_title"], "#general (OpenCode)")
+        self.assertEqual(detail_day["pages_breakdown"][0]["group_name"], "OpenCode")
+        self.assertEqual(detail_day["pages_breakdown"][0]["pages"][0]["clean_title"], "#general")
         self.assertEqual(len(detail_day["timeline"]), 24) # 24 hours
 
-        clean_yt, yt_link = db.parse_window_title_info("brave-browser", "YouTube - Lofi Hip Hop Stream - Brave")
-        self.assertEqual(clean_yt, "YouTube: Lofi Hip Hop Stream")
+        clean_yt, yt_link, yt_grp, yt_ico = db.parse_window_title_info("brave-browser", "YouTube - Lofi Hip Hop Stream - Brave")
+        self.assertEqual(clean_yt, "Lofi Hip Hop Stream")
         self.assertEqual(yt_link, "youtube.com")
+        self.assertEqual(yt_grp, "youtube.com")
+        self.assertEqual(yt_ico, "▶️")
 
-        clean_gh, gh_link = db.parse_window_title_info("firefox", "GitHub - Qssaf/qhealth: Digital Wellbeing — Mozilla Firefox")
-        self.assertEqual(clean_gh, "GitHub: Qssaf/qhealth: Digital Wellbeing")
+        clean_gh, gh_link, gh_grp, gh_ico = db.parse_window_title_info("firefox", "GitHub - Qssaf/qhealth: Digital Wellbeing — Mozilla Firefox")
+        self.assertEqual(clean_gh, "Qssaf/qhealth: Digital Wellbeing")
         self.assertEqual(gh_link, "github.com")
+        self.assertEqual(gh_grp, "github.com")
+        self.assertEqual(gh_ico, "🐙")
 
-        clean_chess, chess_link = db.parse_window_title_info("brave-browser", "Play Chess Online - Chess.com - Brave")
-        self.assertEqual(clean_chess, "Chess.com")
+        clean_chess, chess_link, chess_grp, chess_ico = db.parse_window_title_info("brave-browser", "Play Chess Online - Chess.com - Brave")
+        self.assertEqual(clean_chess, "Play Chess Online")
         self.assertEqual(chess_link, "chess.com")
+        self.assertEqual(chess_grp, "chess.com")
+        self.assertEqual(chess_ico, "♟️")
 
         # Test week range
         detail_week = db.get_app_detail_stats("vesktop", "week")

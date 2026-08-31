@@ -36,60 +36,74 @@ BUDGET_PRESETS = [
 ]
 
 class PageRowWidget(QFrame):
-    def __init__(self, page_data: Dict[str, Any], parent=None):
+    def __init__(self, group_data: Dict[str, Any], parent=None):
         super().__init__(parent)
         self.setProperty("class", "GlassCardInner")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
-        self.clean_title = page_data.get("clean_title") or page_data.get("raw_title", "Unknown Page")
-        self.raw_title = page_data.get("raw_title", self.clean_title)
-        self.sub_link = page_data.get("sub_link", "")
+        self.group_name = group_data.get("group_name") or group_data.get("clean_title", "Unknown Group")
+        self.icon = group_data.get("icon", "🌐")
+        self.sub_link = group_data.get("sub_link", "")
+        self.pages = group_data.get("pages", [])
+        self.page_count = group_data.get("page_count", len(self.pages))
         self.is_expanded = False
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 10, 14, 10)
-        lay.setSpacing(5)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(8)
 
-        dur = page_data.get("duration", 0)
-        pct = page_data.get("percentage", 0.0)
+        dur = group_data.get("duration", 0)
+        pct = group_data.get("percentage", 0.0)
 
         top_row = QHBoxLayout()
-        top_row.setSpacing(8)
+        top_row.setSpacing(10)
 
-        self.truncated_title = self.clean_title
-        self.is_long = len(self.clean_title) > 55
-        if self.is_long:
-            self.truncated_title = self.clean_title[:52].rstrip() + "..."
+        icon_lbl = QLabel(self.icon)
+        icon_lbl.setStyleSheet("font-size: 15px;")
+        top_row.addWidget(icon_lbl)
 
-        self.t_lbl = QLabel(self.truncated_title)
-        self.t_lbl.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: 700;")
-        self.t_lbl.setWordWrap(False)
-        self.t_lbl.setToolTip(f"{self.clean_title}\n\nFull Raw Title:\n{self.raw_title}" if self.clean_title != self.raw_title else self.raw_title)
-        top_row.addWidget(self.t_lbl, 1)
+        grp_lbl = QLabel(self.group_name)
+        grp_lbl.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: 700;")
+        grp_lbl.setWordWrap(False)
+        top_row.addWidget(grp_lbl)
 
-        if self.is_long or (self.raw_title and len(self.raw_title) > len(self.clean_title) + 10):
-            self.expand_btn = QPushButton("▾")
-            self.expand_btn.setFixedSize(22, 22)
-            self.expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.expand_btn.setToolTip("Click to expand / collapse full title")
-            self.expand_btn.setStyleSheet("""
-                QPushButton {
-                    background: rgba(30, 41, 59, 0.5);
-                    border: 1px solid rgba(255, 255, 255, 0.08);
-                    border-radius: 4px;
-                    color: #94a3b8;
-                    font-size: 11px;
-                    font-weight: bold;
-                    padding: 0px;
-                }
-                QPushButton:hover {
-                    background: rgba(51, 65, 85, 0.8);
-                    color: #38bdf8;
-                    border-color: rgba(56, 189, 248, 0.4);
-                }
-            """)
-            self.expand_btn.clicked.connect(self.toggle_expand)
-            top_row.addWidget(self.expand_btn)
+        count_txt = f"{self.page_count} page{'s' if self.page_count != 1 else ''}"
+        badge_lbl = QLabel(count_txt)
+        badge_lbl.setStyleSheet("""
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: #94a3b8;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 6px;
+            border-radius: 4px;
+        """)
+        top_row.addWidget(badge_lbl)
+
+        top_row.addStretch()
+
+        self.expand_btn = QPushButton("▾")
+        self.expand_btn.setFixedSize(24, 24)
+        self.expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.expand_btn.setToolTip("Click to expand / collapse pages in this group")
+        self.expand_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(30, 41, 59, 0.5);
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 4px;
+                color: #94a3b8;
+                font-size: 12px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background: rgba(51, 65, 85, 0.8);
+                color: #38bdf8;
+                border-color: rgba(56, 189, 248, 0.4);
+            }
+        """)
+        self.expand_btn.clicked.connect(self.toggle_expand)
+        top_row.addWidget(self.expand_btn)
 
         dur_box = QHBoxLayout()
         dur_box.setSpacing(6)
@@ -103,13 +117,6 @@ class PageRowWidget(QFrame):
         dur_box.addWidget(pct_lbl)
         top_row.addLayout(dur_box)
         lay.addLayout(top_row)
-
-        if self.sub_link and self.sub_link not in ("web", "editor"):
-            link_icon = "💬 " if "discord.com" in self.sub_link else "🌐 "
-            link_lbl = QLabel(f"{link_icon}{self.sub_link}")
-            link_lbl.setStyleSheet("color: #64748b; font-size: 11px; font-weight: 500; font-family: monospace;")
-            link_lbl.setWordWrap(False)
-            lay.addWidget(link_lbl)
 
         bot_row = QHBoxLayout()
         bot_row.setSpacing(12)
@@ -132,8 +139,8 @@ class PageRowWidget(QFrame):
         """)
         bot_row.addWidget(p_bar, 1)
 
-        keys = page_data.get("keystrokes", 0)
-        clicks = page_data.get("clicks", 0)
+        keys = group_data.get("keystrokes", 0)
+        clicks = group_data.get("clicks", 0)
         if keys > 0 or clicks > 0:
             k_lbl = QLabel(f"⌨ {format_number(keys)} · 🖱 {format_number(clicks)}")
             k_lbl.setStyleSheet("font-size: 10px; color: #94a3b8; font-family: monospace;")
@@ -141,18 +148,96 @@ class PageRowWidget(QFrame):
 
         lay.addLayout(bot_row)
 
+        self.sub_container = QWidget()
+        self.sub_container.setVisible(False)
+        sub_lay = QVBoxLayout(self.sub_container)
+        sub_lay.setContentsMargins(12, 8, 4, 4)
+        sub_lay.setSpacing(8)
+
+        for p_info in self.pages:
+            p_clean = p_info.get("clean_title", "Unknown Page")
+            p_raw = p_info.get("raw_title", p_clean)
+            p_dur = p_info.get("duration", 0)
+            p_pct = p_info.get("percentage", 0.0)
+            p_keys = p_info.get("keystrokes", 0)
+            p_clicks = p_info.get("clicks", 0)
+
+            p_box = QFrame()
+            p_box.setStyleSheet("""
+                QFrame {
+                    background: rgba(15, 23, 42, 0.4);
+                    border-left: 2px solid rgba(56, 189, 248, 0.4);
+                    border-top: none;
+                    border-right: none;
+                    border-bottom: none;
+                    border-radius: 2px;
+                }
+            """)
+            p_box_lay = QVBoxLayout(p_box)
+            p_box_lay.setContentsMargins(10, 6, 8, 6)
+            p_box_lay.setSpacing(4)
+
+            p_top = QHBoxLayout()
+            p_top.setSpacing(8)
+
+            p_t_lbl = QLabel(f"↳ {p_clean}")
+            p_t_lbl.setStyleSheet("color: #e2e8f0; font-size: 12px; font-weight: 600;")
+            p_t_lbl.setWordWrap(True)
+            p_t_lbl.setToolTip(p_raw)
+            p_top.addWidget(p_t_lbl, 1)
+
+            p_dur_lbl = QLabel(format_duration(p_dur))
+            p_dur_lbl.setStyleSheet("color: #34d399; font-size: 11px; font-weight: 700; font-family: monospace;")
+            p_pct_lbl = QLabel(f"({p_pct}%)")
+            p_pct_lbl.setStyleSheet("color: #64748b; font-size: 10px; font-family: monospace;")
+            p_top.addWidget(p_dur_lbl)
+            p_top.addWidget(p_pct_lbl)
+            p_box_lay.addLayout(p_top)
+
+            if p_raw and p_raw != p_clean:
+                p_link_lbl = QLabel(p_raw)
+                p_link_lbl.setStyleSheet("color: #64748b; font-size: 10px; font-family: monospace;")
+                p_link_lbl.setWordWrap(True)
+                p_box_lay.addWidget(p_link_lbl)
+
+            p_bot = QHBoxLayout()
+            p_bot.setSpacing(10)
+            mini_bar = QProgressBar()
+            mini_bar.setFixedHeight(3)
+            mini_bar.setTextVisible(False)
+            mini_bar.setMaximum(100)
+            mini_bar.setValue(max(1, int(p_pct)) if p_dur > 0 else 0)
+            mini_bar.setStyleSheet("""
+                QProgressBar {
+                    background-color: rgba(30, 41, 59, 0.5);
+                    border: none;
+                    border-radius: 1px;
+                }
+                QProgressBar::chunk {
+                    background-color: #38bdf8;
+                    border-radius: 1px;
+                }
+            """)
+            p_bot.addWidget(mini_bar, 1)
+
+            if p_keys > 0 or p_clicks > 0:
+                p_k_lbl = QLabel(f"⌨ {format_number(p_keys)} · 🖱 {format_number(p_clicks)}")
+                p_k_lbl.setStyleSheet("font-size: 9px; color: #64748b; font-family: monospace;")
+                p_bot.addWidget(p_k_lbl)
+
+            p_box_lay.addLayout(p_bot)
+            sub_lay.addWidget(p_box)
+
+        lay.addWidget(self.sub_container)
+
+    def mousePressEvent(self, event):
+        self.toggle_expand()
+        super().mousePressEvent(event)
+
     def toggle_expand(self):
         self.is_expanded = not self.is_expanded
-        if self.is_expanded:
-            self.t_lbl.setWordWrap(True)
-            self.t_lbl.setText(self.clean_title if len(self.clean_title) > 55 else self.raw_title)
-            if hasattr(self, "expand_btn"):
-                self.expand_btn.setText("▴")
-        else:
-            self.t_lbl.setWordWrap(False)
-            self.t_lbl.setText(self.truncated_title)
-            if hasattr(self, "expand_btn"):
-                self.expand_btn.setText("▾")
+        self.sub_container.setVisible(self.is_expanded)
+        self.expand_btn.setText("▴" if self.is_expanded else "▾")
         self.updateGeometry()
 
 
