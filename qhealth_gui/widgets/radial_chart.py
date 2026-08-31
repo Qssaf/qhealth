@@ -96,7 +96,7 @@ class RadialRingPainter(QWidget):
                 dur = app.get("duration", 0)
                 if dur <= 0:
                     continue
-                span = -int((dur / self.total_seconds) * 360 * 16)
+                span = -min(360 * 16, int((dur / float(self.total_seconds)) * 360 * 16))
                 app_color = get_app_color(app.get("app_name", ""), idx)
 
                 pen = QPen(app_color, stroke_width)
