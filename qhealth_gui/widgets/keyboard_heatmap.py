@@ -73,14 +73,14 @@ class KeyboardPainter(QWidget):
         row_count = 5.0
         gap = max(2.5, min(5.0, w / 200.0))
 
-        avail_w = w - 16.0
-        avail_h = h - 16.0
+        avail_w = max(100.0, w - 16.0)
+        avail_h = max(80.0, h - 16.0)
 
-        unit_w = (avail_w - (total_units * gap)) / total_units
-        unit_h = (avail_h - (row_count * gap)) / row_count
+        unit_w = max(4.0, (avail_w - (total_units * gap)) / total_units)
+        unit_h = max(10.0, (avail_h - (row_count * gap)) / row_count)
 
-        key_h = max(20.0, min(unit_h, unit_w * 1.15))
-        key_unit_w = (avail_w - (total_units * gap)) / total_units
+        key_h = max(14.0, min(unit_h, unit_w * 1.15))
+        key_unit_w = max(4.0, (avail_w - (total_units * gap)) / total_units)
 
         total_kb_w = total_units * key_unit_w + (total_units - 1.0) * gap
         total_kb_h = row_count * key_h + (row_count - 1.0) * gap

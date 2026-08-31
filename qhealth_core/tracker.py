@@ -49,8 +49,8 @@ class ActivityTracker:
         
         # Real-time input stats
         self.input_lock = threading.Lock()
-        self.last_input_time = time.time()
-        self.last_flush_time = time.time()
+        self.last_input_time = time.monotonic()
+        self.last_flush_time = time.monotonic()
         self.is_idle = False
         
         # Current chunk stats (to be flushed to DB)
@@ -72,8 +72,8 @@ class ActivityTracker:
 
     def start(self):
         self.running = True
-        self.last_flush_time = time.time()
-        self.last_input_time = time.time()
+        self.last_flush_time = time.monotonic()
+        self.last_input_time = time.monotonic()
         
         # Start input listener
         self.input_thread = threading.Thread(target=self._input_loop, daemon=True)
@@ -99,7 +99,7 @@ class ActivityTracker:
         return self.paused
 
     def get_live_metrics(self) -> Dict[str, Any]:
-        now = time.time()
+        now = time.monotonic()
         with self.input_lock:
             self.recent_events = [e for e in self.recent_events if now - e[0] <= 10]
             
@@ -190,7 +190,7 @@ class ActivityTracker:
                         if self.paused:
                             continue
 
-                        cur_time = time.time()
+                        cur_time = time.monotonic()
                         if ev_type == EV_KEY:
                             if ev_val in (1, 2): # Key down or key repeat
                                 with self.input_lock:
@@ -232,6 +232,7 @@ class ActivityTracker:
     def _inject_kwin_script(self) -> bool:
         """Injects or reloads the active focus monitor in KWin."""
         kwin_script = """
+        var activeWin = null;
         function report() {
             var win = workspace.activeWindow;
             if (win && !win.minimized && !win.popupWindow && !win.specialWindow) {
@@ -251,21 +252,28 @@ class ActivityTracker:
                 }));
             }
         }
+        function hookActive() {
+            if (activeWin) {
+                try { activeWin.captionChanged.disconnect(report); } catch(e) {}
+            }
+            activeWin = workspace.activeWindow;
+            if (activeWin) {
+                try { activeWin.captionChanged.connect(report); } catch(e) {}
+            }
+            report();
+        }
         if (workspace.windowActivated) {
-            workspace.windowActivated.connect(report);
+            workspace.windowActivated.connect(hookActive);
         }
         if (workspace.activeWindowChanged) {
-            workspace.activeWindowChanged.connect(report);
-        }
-        if (workspace.windowCaptionChanged) {
-            workspace.windowCaptionChanged.connect(report);
+            workspace.activeWindowChanged.connect(hookActive);
         }
         if (workspace.windowRemoved) {
             workspace.windowRemoved.connect(report);
         }
-        report();
+        hookActive();
         """
-        script_path = "/tmp/qhealth_kwin.js"
+        script_path = f"/tmp/qhealth_kwin_{os.getuid()}.js"
         try:
             with open(script_path, "w") as f:
                 f.write(kwin_script)
@@ -354,7 +362,7 @@ class ActivityTracker:
                     self._inject_kwin_script()
 
     def _flush_chunk(self):
-        now = time.time()
+        now = time.monotonic()
         with self.input_lock:
             keys = self.chunk_keystrokes
             clicks = self.chunk_clicks
