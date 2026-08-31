@@ -53,13 +53,18 @@ class PageRowWidget(QFrame):
         top_row = QHBoxLayout()
         top_row.setSpacing(12)
 
-        t_lbl = QLabel(clean_title)
+        display_title = clean_title
+        if len(display_title) > 55:
+            display_title = display_title[:52].rstrip() + "..."
+
+        t_lbl = QLabel(display_title)
         t_lbl.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: 700;")
-        t_lbl.setToolTip(raw_title)
+        t_lbl.setToolTip(f"{clean_title}\n\nFull Raw Title:\n{raw_title}" if clean_title != raw_title else raw_title)
         top_row.addWidget(t_lbl, 1)
 
         dur_box = QHBoxLayout()
         dur_box.setSpacing(6)
+        dur_box.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         dur_lbl = QLabel(format_duration(dur))
         dur_lbl.setStyleSheet("font-size: 13px; font-weight: 800; color: #34d399; font-family: monospace;")
         

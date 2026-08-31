@@ -731,39 +731,62 @@ def clean_window_title(app_id: str, raw_title: str) -> str:
         if len(parts) >= 3:
             channel = parts[1].strip("•* ")
             server = parts[2].strip("•* ")
-            return f"{channel} ({server})"
+            title = f"{channel} ({server})"
         elif len(parts) == 2:
-            return parts[1].strip("•* ")
+            p0 = parts[0].strip("•* ")
+            p1 = parts[1].strip("•* ")
+            if "direct message" in p1.lower() or "dms" in p1.lower():
+                title = f"@{p0} (DM)"
+            else:
+                title = f"{p0} ({p1})"
         elif title.startswith("Discord"):
             title = title[7:].strip(" -|•*")
-            return title if title else "Discord"
+            title = title if title else "Discord"
 
-    elif any(b in a_lower for b in ["brave", "firefox", "chrome", "chromium", "zen", "opera", "vivaldi", "edge"]):
+    elif any(b in a_lower for b in ["brave", "firefox", "chrome", "chromium", "zen", "opera", "vivaldi", "edge", "librewolf", "thorium"]):
         for suffix in [
-            " - Brave", " — Mozilla Firefox", " - Google Chrome", " - Chromium",
-            " - Zen Browser", " - Opera", " - Vivaldi", " - Microsoft Edge"
+            " - Brave", " — Brave", " - Mozilla Firefox", " — Mozilla Firefox",
+            " - Google Chrome", " — Google Chrome", " - Chromium", " — Chromium",
+            " - Zen Browser", " — Zen Browser", " - Opera", " — Opera",
+            " - Vivaldi", " — Vivaldi", " - Microsoft Edge", " — Microsoft Edge",
+            " - LibreWolf", " — LibreWolf"
         ]:
             if title.endswith(suffix):
                 title = title[:-len(suffix)].strip()
 
+        if " — " in title:
+            parts = [p.strip() for p in title.split(" — ") if p.strip()]
+            if len(parts) == 2 and parts[0] == parts[1]:
+                title = parts[0]
+        elif " - " in title:
+            parts = [p.strip() for p in title.split(" - ") if p.strip()]
+            if len(parts) == 2 and parts[0] == parts[1]:
+                title = parts[0]
+
         if "Chess.com" in title:
-            return "Chess.com"
-        if "YouTube" in title:
+            title = "Chess.com"
+        elif "YouTube" in title:
             clean_yt = title.replace(" - YouTube", "").replace("YouTube - ", "").strip()
-            return f"YouTube: {clean_yt}" if clean_yt else "YouTube"
-        if "WhatsApp" in title:
-            return "WhatsApp Web"
-        if "GitHub" in title:
+            title = f"YouTube: {clean_yt}" if clean_yt else "YouTube"
+        elif "WhatsApp" in title:
+            title = "WhatsApp Web"
+        elif "GitHub" in title:
             clean_gh = title.replace(" - GitHub", "").replace("GitHub - ", "").strip()
-            return f"GitHub: {clean_gh}" if clean_gh else "GitHub"
-        if "Reddit" in title:
+            title = f"GitHub: {clean_gh}" if clean_gh else "GitHub"
+        elif "Reddit" in title:
             clean_rd = title.replace(" - Reddit", "").replace("Reddit - ", "").strip()
-            return f"Reddit: {clean_rd}" if clean_rd else "Reddit"
-        if "ChatGPT" in title:
-            return "ChatGPT"
+            title = f"Reddit: {clean_rd}" if clean_rd else "Reddit"
+        elif "Google Search" in title:
+            q = title.replace(" - Google Search", "").replace("Google Search - ", "").strip()
+            title = f"Google: {q}" if q else "Google Search"
+        elif "DuckDuckGo" in title:
+            q = title.replace(" at DuckDuckGo", "").replace(" - DuckDuckGo", "").strip()
+            title = f"DuckDuckGo: {q}" if q else "DuckDuckGo"
+        elif "ChatGPT" in title:
+            title = "ChatGPT"
 
     elif any(e in a_lower for e in ["code", "opencode", "kate", "zed", "sublime", "idea", "pycharm"]):
-        for suffix in [" - Visual Studio Code", " - VSCodium", " — OpenCode", " — Kate", " - Zed"]:
+        for suffix in [" - Visual Studio Code", " — Visual Studio Code", " - VSCodium", " — VSCodium", " — OpenCode", " - OpenCode", " — Kate", " - Zed"]:
             if title.endswith(suffix):
                 title = title[:-len(suffix)].strip()
 
