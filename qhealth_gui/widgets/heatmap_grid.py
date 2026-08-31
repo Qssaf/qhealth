@@ -5,11 +5,11 @@ from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush
 from ..utils import format_duration, format_number
 
 HEATMAP_COLORS = [
-    QColor("#131a29"), # Level 0: No activity
-    QColor("#064e3b"), # Level 1: Low
-    QColor("#047857"), # Level 2: Medium
-    QColor("#10b981"), # Level 3: High
-    QColor("#34d399"), # Level 4: Very High
+    QColor("#131a29"),
+    QColor("#064e3b"),
+    QColor("#047857"),
+    QColor("#0e7490"),
+    QColor("#38bdf8"),
 ]
 
 class HeatmapPainter(QWidget):

@@ -118,12 +118,12 @@ class KeyboardPainter(QWidget):
                         border_color = QColor("#10b981")
                         text_color = QColor("#ffffff")
                     elif ratio < 0.80:
-                        bg_color = QColor("#059669")
-                        border_color = QColor("#34d399")
+                        bg_color = QColor("#0e7490")
+                        border_color = QColor("#22d3ee")
                         text_color = QColor("#ffffff")
                     else:
-                        bg_color = QColor("#10b981")
-                        border_color = QColor("#6ee7b7")
+                        bg_color = QColor("#0284c7")
+                        border_color = QColor("#38bdf8")
                         text_color = QColor("#ffffff")
 
                 # 1. Paint 3D Keycap Base

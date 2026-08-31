@@ -54,9 +54,9 @@ class MousePainter(QWidget):
             elif ratio < 0.50:
                 return QColor("#047857"), QColor("#10b981"), QColor("#ffffff"), cnt
             elif ratio < 0.80:
-                return QColor("#059669"), QColor("#34d399"), QColor("#ffffff"), cnt
+                return QColor("#0e7490"), QColor("#22d3ee"), QColor("#ffffff"), cnt
             else:
-                return QColor("#10b981"), QColor("#6ee7b7"), QColor("#ffffff"), cnt
+                return QColor("#0284c7"), QColor("#38bdf8"), QColor("#ffffff"), cnt
 
         # 1. Mouse Body
         body_path = QPainterPath()
