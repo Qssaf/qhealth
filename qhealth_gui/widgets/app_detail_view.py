@@ -1,10 +1,10 @@
 from typing import Dict, Any, Callable, List, Optional
 from datetime import datetime
-from PyQt6.QtCore import Qt, QRectF, QUrl
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QProgressBar, QToolTip, QSizePolicy, QScrollArea
 )
-from PyQt6.QtGui import QPainter, QColor, QFont, QBrush, QLinearGradient, QDesktopServices
+from PyQt6.QtGui import QPainter, QColor, QFont, QBrush, QLinearGradient
 from qhealth_core.db import set_app_budget
 from ..utils import format_duration, format_number, get_app_icon_pixmap
 
@@ -35,116 +35,37 @@ BUDGET_PRESETS = [
     (300, "5 Hours / Day")
 ]
 
-def _safe_open_url(url_str: str):
-    if not url_str or not url_str.startswith(("http://", "https://")):
-        return
-    try:
-        qurl = QUrl(url_str)
-        if qurl.isValid() and qurl.scheme() in ("http", "https"):
-            QDesktopServices.openUrl(qurl)
-        else:
-            QDesktopServices.openUrl(QUrl.fromUserInput(url_str))
-    except Exception:
-        pass
-
-
-class ClickableUrlLabel(QLabel):
-    def __init__(self, url: str, parent=None):
-        super().__init__(f"🔗 {url}", parent)
-        self.url = url
-        self.setStyleSheet("""
-            QLabel {
-                color: #38bdf8;
-                font-size: 10px;
-                font-family: monospace;
-                text-decoration: underline;
-            }
-            QLabel:hover {
-                color: #7dd3fc;
-            }
-        """)
-        self.setWordWrap(True)
-        self.setToolTip(f"Click to open in browser:\n{url}")
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            event.accept()
-            _safe_open_url(self.url)
-        else:
-            super().mousePressEvent(event)
-
 
 class PageRowWidget(QFrame):
-    def __init__(self, group_data: Dict[str, Any], is_expanded: bool = False, parent_view=None, parent=None):
+    def __init__(self, group_data: Dict[str, Any], parent=None):
         super().__init__(parent)
-        self.parent_view = parent_view
         self.setProperty("class", "GlassCardInner")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
-        self.group_name = group_data.get("group_name") or group_data.get("clean_title", "Unknown Group")
-        self.icon = group_data.get("icon", "🌐")
-        self.sub_link = group_data.get("sub_link", "")
-        self.pages = group_data.get("pages", [])
-        self.page_count = group_data.get("page_count", len(self.pages))
-        self.is_expanded = is_expanded
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 12, 14, 12)
-        lay.setSpacing(8)
-
+        group_name = group_data.get("group_name") or group_data.get("clean_title", "Unknown Website")
+        icon = group_data.get("icon", "🌐")
         dur = group_data.get("duration", 0)
         pct = group_data.get("percentage", 0.0)
+        keys = group_data.get("keystrokes", 0)
+        clicks = group_data.get("clicks", 0)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(6)
 
         top_row = QHBoxLayout()
         top_row.setSpacing(10)
 
-        icon_lbl = QLabel(self.icon)
+        icon_lbl = QLabel(icon)
         icon_lbl.setStyleSheet("font-size: 15px;")
         top_row.addWidget(icon_lbl)
 
-        grp_lbl = QLabel(self.group_name)
-        grp_lbl.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: 700;")
+        grp_lbl = QLabel(group_name)
+        grp_lbl.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: 700;")
         grp_lbl.setWordWrap(False)
         top_row.addWidget(grp_lbl)
 
-        count_txt = f"{self.page_count} page{'s' if self.page_count != 1 else ''}"
-        badge_lbl = QLabel(count_txt)
-        badge_lbl.setStyleSheet("""
-            background: rgba(30, 41, 59, 0.8);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            color: #94a3b8;
-            font-size: 10px;
-            font-weight: 700;
-            padding: 2px 6px;
-            border-radius: 4px;
-        """)
-        top_row.addWidget(badge_lbl)
-
         top_row.addStretch()
-
-        self.expand_btn = QPushButton("▾")
-        self.expand_btn.setFixedSize(24, 24)
-        self.expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.expand_btn.setToolTip("Click to expand / collapse pages in this group")
-        self.expand_btn.setStyleSheet("""
-            QPushButton {
-                background: rgba(30, 41, 59, 0.5);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                border-radius: 4px;
-                color: #94a3b8;
-                font-size: 12px;
-                font-weight: bold;
-                padding: 0px;
-            }
-            QPushButton:hover {
-                background: rgba(51, 65, 85, 0.8);
-                color: #38bdf8;
-                border-color: rgba(56, 189, 248, 0.4);
-            }
-        """)
-        self.expand_btn.clicked.connect(self.toggle_expand)
-        top_row.addWidget(self.expand_btn)
 
         dur_box = QHBoxLayout()
         dur_box.setSpacing(6)
@@ -180,139 +101,12 @@ class PageRowWidget(QFrame):
         """)
         bot_row.addWidget(p_bar, 1)
 
-        keys = group_data.get("keystrokes", 0)
-        clicks = group_data.get("clicks", 0)
         if keys > 0 or clicks > 0:
             k_lbl = QLabel(f"⌨ {format_number(keys)} · 🖱 {format_number(clicks)}")
             k_lbl.setStyleSheet("font-size: 10px; color: #94a3b8; font-family: monospace;")
             bot_row.addWidget(k_lbl)
 
         lay.addLayout(bot_row)
-
-        self.sub_container = QWidget()
-        self.sub_lay = QVBoxLayout(self.sub_container)
-        self.sub_lay.setContentsMargins(12, 8, 4, 4)
-        self.sub_lay.setSpacing(8)
-        self._sub_widgets_built = False
-
-        lay.addWidget(self.sub_container)
-
-        if self.is_expanded:
-            self._build_sub_widgets()
-            self.sub_container.setVisible(True)
-            self.expand_btn.setText("▴")
-        else:
-            self.sub_container.setVisible(False)
-            self.expand_btn.setText("▾")
-
-    def _build_sub_widgets(self):
-        if self._sub_widgets_built:
-            return
-        self._sub_widgets_built = True
-
-        for p_info in self.pages:
-            p_clean = p_info.get("clean_title", "Unknown Page")
-            p_raw = p_info.get("raw_title", p_clean)
-            p_sub = p_info.get("sub_link", "")
-            p_dur = p_info.get("duration", 0)
-            p_pct = p_info.get("percentage", 0.0)
-            p_keys = p_info.get("keystrokes", 0)
-            p_clicks = p_info.get("clicks", 0)
-
-            p_box = QFrame()
-            p_box.setStyleSheet("""
-                QFrame {
-                    background: rgba(15, 23, 42, 0.4);
-                    border-left: 2px solid rgba(56, 189, 248, 0.4);
-                    border-top: none;
-                    border-right: none;
-                    border-bottom: none;
-                    border-radius: 2px;
-                }
-            """)
-            p_box_lay = QVBoxLayout(p_box)
-            p_box_lay.setContentsMargins(10, 6, 8, 6)
-            p_box_lay.setSpacing(4)
-
-            p_top = QHBoxLayout()
-            p_top.setSpacing(8)
-
-            p_t_lbl = QLabel(f"↳ {p_clean}")
-            p_t_lbl.setStyleSheet("color: #e2e8f0; font-size: 12px; font-weight: 600;")
-            p_t_lbl.setWordWrap(True)
-            p_t_lbl.setToolTip(f"Full Window Title:\n{p_raw}")
-            p_top.addWidget(p_t_lbl, 1)
-
-            p_dur_lbl = QLabel(format_duration(p_dur))
-            p_dur_lbl.setStyleSheet("color: #34d399; font-size: 11px; font-weight: 700; font-family: monospace;")
-            p_pct_lbl = QLabel(f"({p_pct}%)")
-            p_pct_lbl.setStyleSheet("color: #64748b; font-size: 10px; font-family: monospace;")
-            p_top.addWidget(p_dur_lbl)
-            p_top.addWidget(p_pct_lbl)
-            p_box_lay.addLayout(p_top)
-
-            p_url = p_info.get("url", "")
-            if p_url:
-                p_url_lbl = ClickableUrlLabel(p_url)
-                p_box_lay.addWidget(p_url_lbl)
-            elif p_sub and p_sub not in ("web", "app", "editor") and p_sub != self.group_name:
-                p_link_lbl = QLabel(f"📄 {p_sub}")
-                p_link_lbl.setStyleSheet("color: #64748b; font-size: 10px; font-family: monospace;")
-                p_link_lbl.setWordWrap(True)
-                p_box_lay.addWidget(p_link_lbl)
-            elif p_raw and p_raw != p_clean:
-                p_link_lbl = QLabel(p_raw)
-                p_link_lbl.setStyleSheet("color: #64748b; font-size: 10px; font-family: monospace;")
-                p_link_lbl.setWordWrap(True)
-                p_box_lay.addWidget(p_link_lbl)
-
-            p_bot = QHBoxLayout()
-            p_bot.setSpacing(10)
-            mini_bar = QProgressBar()
-            mini_bar.setFixedHeight(3)
-            mini_bar.setTextVisible(False)
-            mini_bar.setMaximum(100)
-            mini_bar.setValue(max(1, int(p_pct)) if p_dur > 0 else 0)
-            mini_bar.setStyleSheet("""
-                QProgressBar {
-                    background-color: rgba(30, 41, 59, 0.5);
-                    border: none;
-                    border-radius: 1px;
-                }
-                QProgressBar::chunk {
-                    background-color: #38bdf8;
-                    border-radius: 1px;
-                }
-            """)
-            p_bot.addWidget(mini_bar, 1)
-
-            if p_keys > 0 or p_clicks > 0:
-                p_k_lbl = QLabel(f"⌨ {format_number(p_keys)} · 🖱 {format_number(p_clicks)}")
-                p_k_lbl.setStyleSheet("font-size: 9px; color: #64748b; font-family: monospace;")
-                p_bot.addWidget(p_k_lbl)
-
-            p_box_lay.addLayout(p_bot)
-            self.sub_lay.addWidget(p_box)
-
-    def mousePressEvent(self, event):
-        if self.is_expanded and self.sub_container.isVisible() and self.sub_container.geometry().contains(event.pos()):
-            super().mousePressEvent(event)
-            return
-        self.toggle_expand()
-        event.accept()
-
-    def toggle_expand(self):
-        self.is_expanded = not self.is_expanded
-        if self.is_expanded:
-            self._build_sub_widgets()
-        self.sub_container.setVisible(self.is_expanded)
-        self.expand_btn.setText("▴" if self.is_expanded else "▾")
-        if self.parent_view and hasattr(self.parent_view, "expanded_groups"):
-            if self.is_expanded:
-                self.parent_view.expanded_groups.add(self.group_name)
-            else:
-                self.parent_view.expanded_groups.discard(self.group_name)
-        self.updateGeometry()
 
 
 class AppTrendBarsPainter(QWidget):
@@ -731,18 +525,6 @@ class AppDetailView(QWidget):
         # Trend bars
         self.trend_painter.set_data(data.get("timeline", []), range_type)
 
-        if app_id != self._prev_app_id:
-            self.expanded_groups.clear()
-            self._prev_app_id = app_id
-        else:
-            for i in range(self.pages_box.count()):
-                w = self.pages_box.itemAt(i).widget()
-                if w and hasattr(w, "is_expanded") and hasattr(w, "group_name"):
-                    if w.is_expanded:
-                        self.expanded_groups.add(w.group_name)
-                    else:
-                        self.expanded_groups.discard(w.group_name)
-
         while self.pages_box.count():
             item = self.pages_box.takeAt(0)
             if item.widget():
@@ -752,12 +534,10 @@ class AppDetailView(QWidget):
         self.pages_count_lbl.setText(f"{len(pages)} item{'s' if len(pages) != 1 else ''}")
 
         if not pages:
-            lbl = QLabel("No detailed window tabs or channels recorded in this time range.")
+            lbl = QLabel("No detailed window activity or websites recorded in this time range.")
             lbl.setStyleSheet("color: #64748b; font-size: 11px; font-style: italic; padding: 10px;")
             self.pages_box.addWidget(lbl)
         else:
             for p in pages:
-                g_name = p.get("group_name") or p.get("clean_title", "")
-                was_expanded = g_name in self.expanded_groups
-                row = PageRowWidget(p, is_expanded=was_expanded, parent_view=self, parent=self.pages_card)
+                row = PageRowWidget(p, parent=self.pages_card)
                 self.pages_box.addWidget(row)
