@@ -35,6 +35,46 @@ BUDGET_PRESETS = [
     (300, "5 Hours / Day")
 ]
 
+def _safe_open_url(url_str: str):
+    if not url_str or not url_str.startswith(("http://", "https://")):
+        return
+    try:
+        qurl = QUrl(url_str)
+        if qurl.isValid() and qurl.scheme() in ("http", "https"):
+            QDesktopServices.openUrl(qurl)
+        else:
+            QDesktopServices.openUrl(QUrl.fromUserInput(url_str))
+    except Exception:
+        pass
+
+
+class ClickableUrlLabel(QLabel):
+    def __init__(self, url: str, parent=None):
+        super().__init__(f"🔗 {url}", parent)
+        self.url = url
+        self.setStyleSheet("""
+            QLabel {
+                color: #38bdf8;
+                font-size: 10px;
+                font-family: monospace;
+                text-decoration: underline;
+            }
+            QLabel:hover {
+                color: #7dd3fc;
+            }
+        """)
+        self.setWordWrap(True)
+        self.setToolTip(f"Click to open in browser:\n{url}")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            event.accept()
+            _safe_open_url(self.url)
+        else:
+            super().mousePressEvent(event)
+
+
 class PageRowWidget(QFrame):
     def __init__(self, group_data: Dict[str, Any], is_expanded: bool = False, parent_view=None, parent=None):
         super().__init__(parent)
@@ -213,25 +253,10 @@ class PageRowWidget(QFrame):
 
             p_url = p_info.get("url", "")
             if p_url:
-                p_url_lbl = QLabel(f"🔗 {p_url}")
-                p_url_lbl.setStyleSheet("""
-                    QLabel {
-                        color: #38bdf8;
-                        font-size: 10px;
-                        font-family: monospace;
-                        text-decoration: underline;
-                    }
-                    QLabel:hover {
-                        color: #7dd3fc;
-                    }
-                """)
-                p_url_lbl.setWordWrap(True)
-                p_url_lbl.setToolTip(f"Click to open link in browser:\n{p_url}")
-                p_url_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
-                p_url_lbl.mousePressEvent = lambda ev, u=p_url: QDesktopServices.openUrl(QUrl(u))
+                p_url_lbl = ClickableUrlLabel(p_url)
                 p_box_lay.addWidget(p_url_lbl)
             elif p_sub and p_sub not in ("web", "app", "editor") and p_sub != self.group_name:
-                p_link_lbl = QLabel(f"🔗 {p_sub}")
+                p_link_lbl = QLabel(f"📄 {p_sub}")
                 p_link_lbl.setStyleSheet("color: #64748b; font-size: 10px; font-family: monospace;")
                 p_link_lbl.setWordWrap(True)
                 p_box_lay.addWidget(p_link_lbl)
@@ -270,8 +295,11 @@ class PageRowWidget(QFrame):
             self.sub_lay.addWidget(p_box)
 
     def mousePressEvent(self, event):
+        if self.is_expanded and self.sub_container.isVisible() and self.sub_container.geometry().contains(event.pos()):
+            super().mousePressEvent(event)
+            return
         self.toggle_expand()
-        super().mousePressEvent(event)
+        event.accept()
 
     def toggle_expand(self):
         self.is_expanded = not self.is_expanded
@@ -284,16 +312,6 @@ class PageRowWidget(QFrame):
                 self.parent_view.expanded_groups.add(self.group_name)
             else:
                 self.parent_view.expanded_groups.discard(self.group_name)
-        self.updateGeometry()
-
-    def mousePressEvent(self, event):
-        self.toggle_expand()
-        super().mousePressEvent(event)
-
-    def toggle_expand(self):
-        self.is_expanded = not self.is_expanded
-        self.sub_container.setVisible(self.is_expanded)
-        self.expand_btn.setText("▴" if self.is_expanded else "▾")
         self.updateGeometry()
 
 

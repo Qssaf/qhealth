@@ -851,6 +851,11 @@ def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str, str,
     return (title if title else raw_title, "app", "Tasks & Windows", "📄")
 
 def infer_web_url(app_id: str, raw_title: str, clean_title: str, sub_link: str, group_name: str) -> str:
+    a_lower = (app_id or "").lower()
+    is_browser = any(b in a_lower for b in ["brave", "firefox", "chrome", "chromium", "zen", "opera", "vivaldi", "edge", "librewolf", "thorium"])
+    if not is_browser:
+        return ""
+
     t_low = (raw_title or "").lower()
     c_low = (clean_title or "").lower()
 
@@ -910,10 +915,10 @@ def infer_web_url(app_id: str, raw_title: str, clean_title: str, sub_link: str, 
     if "whatsapp" in t_low or group_name == "web.whatsapp.com":
         return "https://web.whatsapp.com"
 
-    if "." in group_name and not group_name.startswith("Other"):
+    if "." in group_name and not group_name.startswith("Other") and " " not in group_name and "·" not in group_name:
         return f"https://{group_name}"
 
-    if "." in sub_link and not sub_link.startswith("web"):
+    if "." in sub_link and not sub_link.startswith("web") and " " not in sub_link and "·" not in sub_link:
         return f"https://{sub_link}"
 
     return ""
