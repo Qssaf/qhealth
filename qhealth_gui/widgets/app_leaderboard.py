@@ -208,11 +208,16 @@ class AppLeaderboardWidget(QFrame):
         self._refresh_list()
 
     def update_apps(self, apps: List[Dict[str, Any]]):
+        if self.apps == apps:
+            return
         self.apps = apps
         self.count_lbl.setText(f"{len(apps)} application{'s' if len(apps) != 1 else ''} tracked")
         self._refresh_list()
 
     def _refresh_list(self):
+        v_bar = self.scroll_area.verticalScrollBar()
+        prev_scroll = v_bar.value()
+
         while self.scroll_layout.count():
             item = self.scroll_layout.takeAt(0)
             if item.widget():
@@ -236,3 +241,5 @@ class AppLeaderboardWidget(QFrame):
                 self.scroll_layout.addWidget(row)
 
         self.scroll_layout.addStretch()
+        if prev_scroll > 0:
+            v_bar.setValue(prev_scroll)

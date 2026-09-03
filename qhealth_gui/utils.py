@@ -26,15 +26,28 @@ ICON_SEARCH_DIRS = [
     os.path.expanduser("~/.local/share/icons"),
 ]
 
+CATEGORY_COLORS = {
+    "Development": QColor("#10b981"),
+    "Browsing": QColor("#06b6d4"),
+    "Gaming": QColor("#8b5cf6"),
+    "Communication": QColor("#f59e0b"),
+    "Media & Design": QColor("#ec4899"),
+    "Productivity": QColor("#3b82f6"),
+    "System": QColor("#64748b"),
+    "Other": QColor("#94a3b8")
+}
+
 def get_app_color(app_name: str, index: int = 0) -> QColor:
-    """Returns a distinct, consistent vibrant color for an application."""
     if index < len(APP_PALETTE):
         return APP_PALETTE[index]
     h = int(hashlib.md5(app_name.encode('utf-8')).hexdigest(), 16)
     return APP_PALETTE[h % len(APP_PALETTE)]
 
 def get_category_color(name: str) -> QColor:
-    return get_app_color(name)
+    if name in CATEGORY_COLORS:
+        return CATEGORY_COLORS[name]
+    h = int(hashlib.md5(name.encode('utf-8')).hexdigest(), 16)
+    return APP_PALETTE[h % len(APP_PALETTE)]
 
 def format_duration(seconds: int) -> str:
     if seconds < 60:

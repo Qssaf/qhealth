@@ -97,6 +97,8 @@ class QHealthDaemon:
 
     def _check_budget_limits(self, stats: dict):
         today_str = datetime.date.today().strftime("%Y-%m-%d")
+        if self.notified_budget_alerts:
+            self.notified_budget_alerts = {k for k in self.notified_budget_alerts if k.startswith(today_str)}
         budgets = get_all_app_budgets()
         for app in stats.get("apps", []):
             a_id = app.get("app_id", "").lower()
@@ -144,6 +146,11 @@ class QHealthDaemon:
     def stop(self):
         self.running = False
         self.tracker.stop()
+        if self._lock_file:
+            try:
+                self._lock_file.close()
+            except Exception:
+                pass
         if PID_FILE.exists():
             PID_FILE.unlink(missing_ok=True)
         if STATE_FILE.exists():

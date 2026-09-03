@@ -26,7 +26,7 @@ GLOW_STYLES = {
 
 class GlowingDayCell(QPushButton):
     def __init__(self, day_num: int, date_str: str, is_current_month: bool, is_selected: bool, is_today: bool, activity: Dict[str, Any], parent=None):
-        super().__init__(str(day_num), parent)
+        super().__init__(str(day_num) if (is_current_month and day_num > 0) else "", parent)
         self.date_str = date_str
         self.day_num = day_num
         self.is_current_month = is_current_month
@@ -42,7 +42,7 @@ class GlowingDayCell(QPushButton):
         else:
             border_extra = ""
             if is_selected:
-                border_extra = "border: 2px solid #22d3ee; box-shadow: 0 0 10px #22d3ee;"
+                border_extra = "border: 2px solid #22d3ee;"
             elif is_today:
                 border_extra = "border: 1.5px solid #fbbf24;"
 

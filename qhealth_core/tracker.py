@@ -202,7 +202,7 @@ class ActivityTracker:
                                         self.chunk_mouse_buttons[btn_name] += 1
                                         self.chunk_clicks += 1
                                         self.recent_events.append((cur_time, 'click'))
-                                    else: # Keyboard key
+                                    elif ev_code < 0x100: # Physical keyboard key (< 256)
                                         self.chunk_key_codes[ev_code] += 1
                                         self.chunk_keystrokes += 1
                                         self.recent_events.append((cur_time, 'key'))
@@ -210,7 +210,7 @@ class ActivityTracker:
                             with self.input_lock:
                                 self.last_input_time = cur_time
                                 self.chunk_scrolls += 1
-                                self.recent_events.append((cur_time, 'click'))
+                                self.recent_events.append((cur_time, 'scroll'))
                 except OSError:
                     # Clean up disconnected / invalid FDs
                     try:
@@ -334,7 +334,6 @@ class ActivityTracker:
                             is_qhealth = (
                                 "qhealth" in raw_app.lower() or
                                 "qhealth" in raw_cls.lower() or
-                                "qhealth" in raw_title.lower() or
                                 resolved.get("app_id") == "qhealth"
                             )
                             
@@ -394,7 +393,7 @@ class ActivityTracker:
         duration = elapsed if (is_active and not is_afk and not self.paused) else 0
         
         try:
-            if duration > 0 or keys > 0 or clicks > 0:
+            if duration > 0 or keys > 0 or clicks > 0 or scrolls > 0:
                 record_activity_chunk(
                     app_id=app_info.get("app_id", "unknown"),
                     app_name=app_info.get("display_name", "Unknown App"),
@@ -402,7 +401,8 @@ class ActivityTracker:
                     duration_seconds=duration,
                     keystrokes=keys,
                     clicks=clicks,
-                    scrolls=scrolls
+                    scrolls=scrolls,
+                    category=app_info.get("category")
                 )
 
             if key_codes or mouse_btns:

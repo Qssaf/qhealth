@@ -16,6 +16,17 @@ from qhealth_gui.utils import format_duration, format_number
 
 SOCKET_NAME = "qhealth_single_instance_socket"
 STATE_FILE = Path.home() / ".local" / "share" / "qhealth" / "live_state.json"
+PID_FILE = Path.home() / ".local" / "share" / "qhealth" / "daemon.pid"
+
+def is_daemon_running() -> bool:
+    if PID_FILE.exists():
+        try:
+            pid = int(PID_FILE.read_text().strip())
+            os.kill(pid, 0)
+            return True
+        except (ValueError, ProcessLookupError, PermissionError):
+            pass
+    return False
 
 class QHealthApp:
     def __init__(self):
@@ -32,9 +43,12 @@ class QHealthApp:
         if not self._check_single_instance():
             sys.exit(0)
 
-        # 2. Start Tracker
-        self.tracker = ActivityTracker()
-        self.tracker.start()
+        self.daemon_active = is_daemon_running()
+        if not self.daemon_active:
+            self.tracker = ActivityTracker()
+            self.tracker.start()
+        else:
+            self.tracker = None
 
         # 3. Create Main Window
         self.window = QHealthMainWindow(self.tracker)
@@ -171,7 +185,8 @@ class QHealthApp:
 
     def _toggle_pause(self):
         new_paused = toggle_pause_setting()
-        self.tracker.paused = new_paused
+        if self.tracker:
+            self.tracker.paused = new_paused
         self.pause_action.setText("Resume Tracking" if new_paused else "Pause Tracking")
         self.window.btn_pause.setText("Resume" if new_paused else "Pause")
         self.window.btn_pause.setChecked(new_paused)
@@ -186,7 +201,8 @@ class QHealthApp:
         if self.local_server:
             self.local_server.close()
             QLocalServer.removeServer(SOCKET_NAME)
-        self.tracker.stop()
+        if self.tracker:
+            self.tracker.stop()
         self.app.quit()
 
     def run(self, show_gui: bool = True):

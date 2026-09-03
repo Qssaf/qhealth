@@ -166,8 +166,8 @@ class QHealthMainWindow(QMainWindow):
         title_lbl = QLabel("QHEALTH")
         title_lbl.setStyleSheet("font-size: 17px; font-weight: 900; color: #ffffff; letter-spacing: 0.5px;")
 
-        self.streak_badge = QLabel("🔥 1-Day Streak")
-        self.streak_badge.setStyleSheet("font-size: 10px; font-weight: 700; color: #f59e0b; background-color: rgba(245,158,11,0.15); border: 1px solid rgba(245,158,11,0.3); padding: 3px 8px; border-radius: 6px; font-family: 'Inter', sans-serif;")
+        self.streak_badge = QLabel("🌱 Day 0")
+        self.streak_badge.setStyleSheet("font-size: 10px; font-weight: 700; color: #94a3b8; background-color: rgba(148,163,184,0.12); border: 1px solid rgba(148,163,184,0.25); padding: 3px 8px; border-radius: 6px; font-family: 'Inter', sans-serif;")
 
         brand_box.addWidget(logo_lbl)
         brand_box.addWidget(title_lbl)
@@ -316,16 +316,19 @@ class QHealthMainWindow(QMainWindow):
             top_name = top_app.get("app_name", "") if top_app else ""
             top_pct = top_app.get("percentage", 0.0) if top_app else 0.0
 
-            # Update Streak Badge
             try:
                 streak_info = get_activity_streak_stats()
-                streak_days = max(1, streak_info.get("current_streak", 1))
-                self.streak_badge.setText(f"🔥 {streak_days}-Day Streak")
+                streak_days = streak_info.get("current_streak", 0)
+                if streak_days > 0:
+                    self.streak_badge.setText(f"🔥 {streak_days}-Day Streak")
+                    self.streak_badge.setStyleSheet("font-size: 10px; font-weight: 700; color: #f59e0b; background-color: rgba(245,158,11,0.15); border: 1px solid rgba(245,158,11,0.3); padding: 3px 8px; border-radius: 6px; font-family: 'Inter', sans-serif;")
+                else:
+                    self.streak_badge.setText("🌱 Day 0")
+                    self.streak_badge.setStyleSheet("font-size: 10px; font-weight: 700; color: #94a3b8; background-color: rgba(148,163,184,0.12); border: 1px solid rgba(148,163,184,0.25); padding: 3px 8px; border-radius: 6px; font-family: 'Inter', sans-serif;")
             except Exception:
                 pass
 
-            # Update Overview Page (Top Applications directly on the Radial Ring and Cards)
-            self.stat_cards.update_stats(total_seconds, keys, clicks, scrolls, top_name, top_pct)
+            self.stat_cards.update_stats(total_seconds, keys, clicks, scrolls, top_name, top_pct, focus_score, focus_rating)
             self.radial_widget.update_data(total_seconds, apps, self.current_range)
             self.timeline_widget.update_data(timeline, self.current_range)
 

@@ -4,7 +4,7 @@ import urllib.parse
 import sqlite3
 import datetime
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from contextlib import contextmanager
 from .app_resolver import app_resolver
 
@@ -68,6 +68,15 @@ def get_db():
 def get_category_for_app(app_id: str, app_name: str) -> str:
     app_lower = (app_id or "").lower()
     name_lower = (app_name or "").lower()
+
+    try:
+        user_rules = get_custom_app_rules()
+        if app_lower in user_rules:
+            return user_rules[app_lower]["category"]
+        if name_lower in user_rules:
+            return user_rules[name_lower]["category"]
+    except Exception:
+        pass
     
     for category, keywords in DEFAULT_CATEGORIES.items():
         for kw in keywords:
@@ -286,7 +295,9 @@ def set_custom_app_rule(app_id: str, category: str, display_name: Optional[str] 
         cursor.execute("""
         INSERT INTO custom_app_rules (app_id, display_name, category)
         VALUES (?, ?, ?)
-        ON CONFLICT(app_id) DO UPDATE SET category = excluded.category
+        ON CONFLICT(app_id) DO UPDATE SET 
+            category = excluded.category,
+            display_name = COALESCE(excluded.display_name, custom_app_rules.display_name)
         """, (cleaned_id, display_name, category))
 
         # Also update historical records for this app
@@ -295,6 +306,7 @@ def set_custom_app_rule(app_id: str, category: str, display_name: Optional[str] 
         """, (category, cleaned_id, cleaned_id))
 
         conn.commit()
+    app_resolver.clear_cache()
 
 def get_custom_app_rules() -> Dict[str, Dict[str, Any]]:
     init_db()
@@ -429,15 +441,17 @@ def record_activity_chunk(
     duration_seconds: int,
     keystrokes: int,
     clicks: int,
-    scrolls: int
+    scrolls: int,
+    category: Optional[str] = None
 ):
-    if duration_seconds <= 0 and keystrokes <= 0 and clicks <= 0:
+    if duration_seconds <= 0 and keystrokes <= 0 and clicks <= 0 and scrolls <= 0:
         return
 
     now = datetime.datetime.now()
     date_str = now.strftime("%Y-%m-%d")
     hour_int = now.hour
-    category = get_category_for_app(app_id, app_name)
+    if not category:
+        category = get_category_for_app(app_id, app_name)
 
     init_db()
     with get_db() as conn:
@@ -539,9 +553,22 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
             b_info = budgets.get(a_id)
             if b_info and b_info.get("enabled", 1) and b_info.get("daily_limit_minutes", 0) > 0:
                 limit_mins = b_info["daily_limit_minutes"]
-                limit_secs = limit_mins * 60
-                app["budget_minutes"] = limit_mins
-                app["budget_percentage"] = min(100.0, round((app["duration"] / float(limit_secs)) * 100, 1))
+                range_days = 1
+                if range_type == "week":
+                    range_days = 7
+                elif range_type == "month":
+                    range_days = 30
+                elif range_type == "year":
+                    range_days = 365
+
+                if range_type == "all_time":
+                    app["budget_minutes"] = limit_mins
+                    app["budget_percentage"] = None
+                else:
+                    total_limit_secs = limit_mins * 60 * range_days
+                    app["budget_minutes"] = limit_mins * range_days if range_days > 1 else limit_mins
+                    app["daily_limit_minutes"] = limit_mins
+                    app["budget_percentage"] = min(100.0, round((app["duration"] / float(total_limit_secs)) * 100, 1))
             else:
                 app["budget_minutes"] = None
                 app["budget_percentage"] = None
@@ -597,8 +624,8 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
             day_map = {row["date_str"]: dict(row) for row in cursor.fetchall()}
             timeline = []
             for i in range(num_days - 1, -1, -1):
-                d = (today - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
-                d_obj = today - datetime.timedelta(days=i)
+                d_obj = anchor_date - datetime.timedelta(days=i)
+                d = d_obj.strftime("%Y-%m-%d")
                 entry = day_map.get(d, {"duration": 0, "keystrokes": 0, "clicks": 0})
                 timeline.append({
                     "date": d,
@@ -622,8 +649,8 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
             """, params)
             month_map = {row["month_str"]: dict(row) for row in cursor.fetchall()}
             timeline = []
-            cur_year = today.year
-            cur_month = today.month
+            cur_year = anchor_date.year
+            cur_month = anchor_date.month
             for i in range(11, -1, -1):
                 m_offset = cur_month - i
                 y = cur_year
@@ -785,10 +812,12 @@ def parse_window_title_info(app_id: str, raw_title: str) -> Tuple[str, str, str,
         elif len(parts) == 2:
             p0 = parts[0].strip("•* ")
             p1 = parts[1].strip("•* ")
+            target_name = p1 if p0.lower() in ("discord", "vesktop") else p0
+            group_name = p0 if p0.lower() not in ("discord", "vesktop") else p1
             if "direct message" in p1.lower() or "dms" in p1.lower():
-                return (f"@{p0}", "discord.com · DMs", "Direct Messages", "💬")
+                return (target_name, "discord.com · DMs", "Direct Messages", "💬")
             else:
-                return (p0, f"discord.com · {p1}", p1, "💬")
+                return (target_name, f"discord.com · {group_name}", group_name, "💬")
         elif title.startswith("Discord"):
             sub = title[7:].strip(" -|•*")
             return (sub if sub else "Discord", "discord.com", "Discord", "💬")
@@ -927,7 +956,7 @@ def vacuum_and_cleanup_db():
     init_db()
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM activity_log WHERE duration_seconds <= 0 AND keystrokes <= 0 AND clicks <= 0")
+        cursor.execute("DELETE FROM activity_log WHERE duration_seconds <= 0 AND keystrokes <= 0 AND clicks <= 0 AND scrolls <= 0")
         conn.commit()
         try:
             cursor.execute("PRAGMA wal_checkpoint(PASSIVE);")
@@ -1040,8 +1069,8 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
             day_map = {r["date_str"]: dict(r) for r in cursor.fetchall()}
             timeline = []
             for i in range(num_days - 1, -1, -1):
-                d = (today - datetime.timedelta(days=i)).strftime("%Y-%m-%d")
-                d_obj = today - datetime.timedelta(days=i)
+                d_obj = anchor_date - datetime.timedelta(days=i)
+                d = d_obj.strftime("%Y-%m-%d")
                 entry = day_map.get(d, {"duration": 0, "keystrokes": 0, "clicks": 0})
                 timeline.append({
                     "date": d,
@@ -1064,8 +1093,8 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
             """, [app_id, app_id] + params)
             month_map = {r["month_str"]: dict(r) for r in cursor.fetchall()}
             timeline = []
-            cur_year = today.year
-            cur_month = today.month
+            cur_year = anchor_date.year
+            cur_month = anchor_date.month
             for i in range(11, -1, -1):
                 m_offset = cur_month - i
                 y = cur_year
@@ -1214,17 +1243,26 @@ def export_data_to_csv(file_path: str, range_type: str = "all_time", target_date
     if not target_date:
         target_date = today.strftime("%Y-%m-%d")
 
+    try:
+        anchor_date = datetime.datetime.strptime(target_date, "%Y-%m-%d").date()
+    except Exception:
+        anchor_date = today
+
     with get_db() as conn:
         cursor = conn.cursor()
         if range_type == "day":
             date_condition = "date_str = ?"
             params = [target_date]
         elif range_type == "week":
-            start_date = (today - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
+            start_date = (anchor_date - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
             date_condition = "date_str >= ? AND date_str <= ?"
             params = [start_date, target_date]
         elif range_type == "month":
-            start_date = (today - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
+            start_date = (anchor_date - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
+            date_condition = "date_str >= ? AND date_str <= ?"
+            params = [start_date, target_date]
+        elif range_type == "year":
+            start_date = (anchor_date - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
             date_condition = "date_str >= ? AND date_str <= ?"
             params = [start_date, target_date]
         else:

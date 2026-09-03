@@ -145,7 +145,53 @@ class TestDatabase(unittest.TestCase):
 
         # Test week range
         detail_week = db.get_app_detail_stats("vesktop", "week")
-        self.assertEqual(len(detail_week["timeline"]), 7) # 7 days
+        self.assertEqual(len(detail_week["timeline"]), 7)
+
+    def test_parse_window_title_annotations_and_dms(self):
+        annotations = db.parse_window_title_info.__annotations__
+        self.assertIn("return", annotations)
+
+        dm_title, dm_link, dm_grp, dm_ico = db.parse_window_title_info("vesktop", "• Discord | @Special Snail ;)")
+        self.assertEqual(dm_title, "@Special Snail ;)")
+        self.assertEqual(dm_grp, "@Special Snail ;)")
+
+        dm2_title, dm2_link, dm2_grp, dm2_ico = db.parse_window_title_info("vesktop", "• Discord | Direct Messages")
+        self.assertEqual(dm2_title, "Direct Messages")
+
+    def test_historical_anchor_date_timeline(self):
+        past_date = "2026-08-15"
+        db.record_activity_chunk("firefox", "Firefox", "Historical Tab", 600, 100, 20, 5)
+        with db.get_db() as conn:
+            conn.cursor().execute("UPDATE activity_log SET date_str = ? WHERE window_title = 'Historical Tab'", (past_date,))
+            conn.commit()
+
+        stats_week = db.get_stats_by_range("week", target_date=past_date)
+        timeline_dates = [entry["date"] for entry in stats_week["timeline"]]
+        self.assertIn(past_date, timeline_dates)
+        past_entry = next(entry for entry in stats_week["timeline"] if entry["date"] == past_date)
+        self.assertEqual(past_entry["duration"], 600)
+
+        detail_week = db.get_app_detail_stats("firefox", "week", target_date=past_date)
+        detail_dates = [entry["date"] for entry in detail_week["timeline"]]
+        self.assertIn(past_date, detail_dates)
+
+    def test_scroll_only_chunk_recorded_and_preserved(self):
+        db.record_activity_chunk("reader", "PDF Reader", "Document.pdf", 0, 0, 0, 75)
+        with db.get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT scrolls FROM activity_log WHERE app_id = 'reader'")
+            row = cur.fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], 75)
+
+        db.vacuum_and_cleanup_db()
+
+        with db.get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT scrolls FROM activity_log WHERE app_id = 'reader'")
+            row = cur.fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row[0], 75)
 
     def test_key_and_mouse_heatmap(self):
         db.record_input_heatmap_chunk(
@@ -235,6 +281,25 @@ class TestAppResolver(unittest.TestCase):
         # Ensure 'code' does not match 'opencode'
         res_open = app_resolver.resolve("opencode")
         self.assertEqual(res_open["display_name"], "OpenCode")
+
+    def test_reverse_dns_and_suffix_resolution(self):
+        app_resolver._apps_cache["org.pulseaudio.pavucontrol"] = {
+            "display_name": "Volume Control",
+            "icon": "org.pulseaudio.pavucontrol",
+            "category": "Media & Design",
+            "desktop_id": "org.pulseaudio.pavucontrol"
+        }
+        app_resolver.clear_cache()
+        res = app_resolver.resolve("pavucontrol")
+        self.assertEqual(res["display_name"], "Volume Control")
+        self.assertEqual(res["category"], "Media & Design")
+
+    def test_category_color_distinctness(self):
+        dev_c = get_category_color("Development")
+        browse_c = get_category_color("Browsing")
+        game_c = get_category_color("Gaming")
+        self.assertNotEqual(dev_c.name(), browse_c.name())
+        self.assertNotEqual(dev_c.name(), game_c.name())
 
 class TestGUIWidgets(unittest.TestCase):
     def setUp(self):

@@ -49,8 +49,9 @@ class StatCardsWidget(QFrame):
         lay.addWidget(self.card_clicks)
         lay.addWidget(self.card_top)
 
-    def update_stats(self, total_seconds: int, keys: int, clicks: int, scrolls: int, top_app_name: str, top_app_pct: float):
-        self.card_time.set_value(format_duration(total_seconds), "Foreground app time")
+    def update_stats(self, total_seconds: int, keys: int, clicks: int, scrolls: int, top_app_name: str, top_app_pct: float, focus_score: int = 100, focus_rating: str = "Deep Work"):
+        time_sub = f"Focus: {focus_rating} ({focus_score}%)" if total_seconds > 0 else "Foreground app time"
+        self.card_time.set_value(format_duration(total_seconds), time_sub)
         self.card_keys.set_value(format_number(keys), "Recorded keypresses")
         self.card_clicks.set_value(f"{format_number(clicks)}", f"{format_number(scrolls)} scrolls")
 

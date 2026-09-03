@@ -60,9 +60,12 @@ class PageRowWidget(QFrame):
         icon_lbl.setStyleSheet("font-size: 15px;")
         top_row.addWidget(icon_lbl)
 
-        grp_lbl = QLabel(group_name)
+        display_name = group_name if len(group_name) <= 50 else group_name[:47] + "..."
+        grp_lbl = QLabel(display_name)
         grp_lbl.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: 700;")
         grp_lbl.setWordWrap(False)
+        if len(group_name) > 50:
+            grp_lbl.setToolTip(group_name)
         top_row.addWidget(grp_lbl)
 
         top_row.addStretch()
@@ -228,9 +231,8 @@ class AppDetailView(QWidget):
         self.on_back = on_back
         self.current_app_id = ""
         self._last_duration = 0
+        self._last_range_type = "day"
         self._is_updating = False
-        self.expanded_groups = set()
-        self._prev_app_id = None
 
         root_lay = QVBoxLayout(self)
         root_lay.setContentsMargins(0, 0, 0, 0)
@@ -456,12 +458,22 @@ class AppDetailView(QWidget):
         if self._is_updating or not self.current_app_id:
             return
         limit_mins = self.budget_combo.currentData()
+        if limit_mins is None:
+            limit_mins = 0
         set_app_budget(self.current_app_id, limit_mins, enabled=(limit_mins > 0))
-        self._update_budget_ui(self._last_duration, limit_mins)
+        self._update_budget_ui(self._last_duration, limit_mins, self._last_range_type)
 
-    def _update_budget_ui(self, dur: int, limit_mins: int):
+    def _update_budget_ui(self, dur: int, limit_mins: int, range_type: str = "day"):
         if limit_mins > 0:
-            limit_secs = limit_mins * 60
+            range_days = 1
+            if range_type == "week":
+                range_days = 7
+            elif range_type == "month":
+                range_days = 30
+            elif range_type == "year":
+                range_days = 365
+
+            limit_secs = limit_mins * 60 * range_days
             pct = min(100, int((dur / float(limit_secs)) * 100)) if limit_secs > 0 else 0
             self.budget_bar.setValue(pct)
             
@@ -477,7 +489,8 @@ class AppDetailView(QWidget):
                     border-radius: 3px;
                 }}
             """)
-            self.budget_status_lbl.setText(f"Usage today: {format_duration(dur)} / {format_duration(limit_secs)} ({pct}%)")
+            label_suffix = "today" if range_type == "day" else f"in {range_type.replace('_', ' ')}"
+            self.budget_status_lbl.setText(f"Usage {label_suffix}: {format_duration(dur)} / {format_duration(limit_secs)} ({pct}%)")
         else:
             self.budget_bar.setValue(0)
             self.budget_status_lbl.setText("No daily budget set for this app.")
@@ -490,7 +503,12 @@ class AppDetailView(QWidget):
         app_name = data.get("display_name", "Unknown")
         icon_name = data.get("icon", "")
         app_id = data.get("app_id", "")
+        
+        if self.current_app_id != app_id:
+            self.scroll_area.verticalScrollBar().setValue(0)
+
         self.current_app_id = app_id
+        self._last_range_type = range_type
 
         self.name_lbl.setText(app_name)
         self.id_lbl.setText(f"({app_id})")
@@ -520,7 +538,7 @@ class AppDetailView(QWidget):
             self.budget_combo.setCurrentIndex(0)
         self._is_updating = False
 
-        self._update_budget_ui(dur, limit_mins)
+        self._update_budget_ui(dur, limit_mins, range_type)
 
         # Trend bars
         self.trend_painter.set_data(data.get("timeline", []), range_type)

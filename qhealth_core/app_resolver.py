@@ -13,13 +13,13 @@ DESKTOP_DIRS = [
 ]
 
 CATEGORY_MAPPING = {
-    "Development": ["Development", "IDE", "TextEditor", "Programming"],
+    "Development": ["Development", "IDE", "TextEditor", "Programming", "TerminalEmulator"],
     "Gaming": ["Game", "Emulator"],
     "Browsing": ["WebBrowser"],
     "Communication": ["Chat", "InstantMessaging", "Email", "Telephony", "IRCClient"],
     "Media & Design": ["AudioVideo", "Audio", "Video", "Graphics", "Photography", "RasterGraphics", "VectorGraphics", "Recorder"],
     "Productivity": ["Office", "Spreadsheet", "WordProcessor", "Presentation", "Finance", "Calendar"],
-    "System": ["System", "Utility", "Settings", "FileManager", "TerminalEmulator", "Monitor"]
+    "System": ["System", "Utility", "Settings", "FileManager", "Monitor"]
 }
 
 # Special overrides for specific apps
@@ -87,9 +87,10 @@ class AppInfoResolver:
                     pass
 
     def _detect_category(self, cats_raw: str, app_id: str, app_name: str) -> str:
+        cats_set = {c.strip() for c in cats_raw.split(";") if c.strip()}
         for cat_name, keywords in CATEGORY_MAPPING.items():
             for kw in keywords:
-                if kw in cats_raw:
+                if kw in cats_set:
                     return cat_name
         
         target = f"{app_id} {app_name}".lower()
@@ -173,18 +174,20 @@ class AppInfoResolver:
             self._resolved_cache[cache_key] = res
             return res
 
-        tokens = set(re.split(r"[\.\-_/\s]+", f"{cleaned_id} {cleaned_cls}"))
+        cleaned_parts = [p for p in re.split(r"[\.\-_/\s]+", f"{cleaned_id} {cleaned_cls}") if p]
         for key, info in self._apps_cache.items():
-            if key in tokens:
-                res = {
-                    "app_id": key,
-                    "display_name": info["display_name"],
-                    "icon": info["icon"],
-                    "category": info["category"],
-                    "is_active_window": True
-                }
-                self._resolved_cache[cache_key] = res
-                return res
+            key_last = key.split(".")[-1]
+            if key_last and key_last not in {"desktop", "client", "app", "linux"}:
+                if key_last in cleaned_parts or key.endswith(f".{cleaned_id}") or (cleaned_cls and key.endswith(f".{cleaned_cls}")):
+                    res = {
+                        "app_id": key,
+                        "display_name": info["display_name"],
+                        "icon": info["icon"],
+                        "category": info["category"],
+                        "is_active_window": True
+                    }
+                    self._resolved_cache[cache_key] = res
+                    return res
 
         pretty_name = cleaned_id.replace("-", " ").replace("_", " ").title()
         category = self._detect_category("", cleaned_id, pretty_name)
