@@ -258,6 +258,25 @@ class TestDatabase(unittest.TestCase):
         self.assertGreater(csv_path.stat().st_size, 50)
         self.assertGreater(json_path.stat().st_size, 50)
 
+        # JSON backup also carries budgets and settings
+        import json
+        db.set_app_budget("steam", 45)
+        db.set_break_reminder_minutes(50)
+        db.export_data_to_json(str(json_path))
+        backup = json.loads(json_path.read_text())
+        budgets = {b["app_id"]: b["daily_limit_minutes"] for b in backup["app_budgets"]}
+        self.assertEqual(budgets["steam"], 45)
+        self.assertEqual(backup["settings"]["break_reminder_minutes"], "50")
+
+    def test_break_reminder_setting(self):
+        self.assertEqual(db.get_break_reminder_minutes(), 0)  # off by default
+        db.set_break_reminder_minutes(30)
+        self.assertEqual(db.get_break_reminder_minutes(), 30)
+        db.set_setting("break_reminder_minutes", "garbage")
+        self.assertEqual(db.get_break_reminder_minutes(), 0)
+        db.set_break_reminder_minutes(-5)
+        self.assertEqual(db.get_break_reminder_minutes(), 0)
+
     def test_settings_ipc(self):
         self.assertFalse(db.is_paused_setting())
         new_state = db.toggle_pause_setting()
@@ -655,6 +674,47 @@ class TestBudgetEnforcer(unittest.TestCase):
         self.assertEqual(self.mocks["note"].call_args_list[-1].args[0], "QHealth — 1 Minute Left")
         self.enforcer.check(self._usage(25 * 60, extra=15))
         self.assertEqual(self.mocks["close"].call_count, 2)  # killed again at the new limit
+
+class TestBreakReminder(unittest.TestCase):
+    def setUp(self):
+        from qhealth_core.wellbeing import BreakReminder
+        self.tracker = unittest.mock.Mock(paused=False, last_input_time=0.0)
+        self.reminder = BreakReminder(self.tracker)
+        patcher = unittest.mock.patch("qhealth_core.wellbeing.send_notification")
+        self.notify = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _at(self, now, last_input=None, minutes=50):
+        self.tracker.last_input_time = now if last_input is None else last_input
+        return self.reminder.check(minutes, now=now)
+
+    def test_reminds_after_continuous_activity_and_repeats(self):
+        self.assertFalse(self._at(0))
+        self.assertFalse(self._at(49 * 60))
+        self.assertTrue(self._at(50 * 60))
+        self.assertFalse(self._at(51 * 60))         # restarts the count
+        self.assertTrue(self._at(100 * 60))
+        self.assertEqual(self.notify.call_count, 2)
+
+    def test_short_pauses_do_not_count_as_break(self):
+        self._at(0)
+        self._at(20 * 60, last_input=20 * 60 - 120)  # 2 min without input
+        self.assertTrue(self._at(50 * 60))
+
+    def test_five_minute_break_resets(self):
+        self._at(0)
+        self._at(30 * 60, last_input=24 * 60)       # 6 min without input: a real break
+        self.assertFalse(self._at(50 * 60))         # activity resumes: count starts over here
+        self.assertFalse(self._at(80 * 60))
+        self.assertTrue(self._at(100 * 60))
+
+    def test_off_or_paused(self):
+        self._at(0, minutes=0)
+        self.assertFalse(self._at(999 * 60, minutes=0))
+        self._at(0)
+        self.tracker.paused = True
+        self.assertFalse(self._at(60 * 60))
+        self.notify.assert_not_called()
 
 class TestKWinScriptRecovery(unittest.TestCase):
     def _run(self, returncode, stdout):

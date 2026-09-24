@@ -490,6 +490,18 @@ def toggle_pause_setting() -> bool:
 def is_paused_setting() -> bool:
     return get_setting("paused", "false").lower() == "true"
 
+DEFAULT_BREAK_REMINDER_MINUTES = 50
+
+def get_break_reminder_minutes() -> int:
+    """Minutes of continuous activity before a break reminder; 0 means off (the default)."""
+    try:
+        return max(0, int(get_setting("break_reminder_minutes", "0")))
+    except ValueError:
+        return 0
+
+def set_break_reminder_minutes(minutes: int):
+    set_setting("break_reminder_minutes", str(max(0, int(minutes))))
+
 def record_input_heatmap_chunk(key_counts: Dict[int, int], mouse_counts: Dict[str, int]):
     if not key_counts and not mouse_counts:
         return
@@ -1466,14 +1478,22 @@ def export_data_to_json(file_path: str):
         cursor.execute("SELECT * FROM custom_app_rules")
         rules = [dict(r) for r in cursor.fetchall()]
 
+        cursor.execute("SELECT * FROM app_budgets")
+        budgets = [dict(r) for r in cursor.fetchall()]
+
+        cursor.execute("SELECT key, value FROM app_settings")
+        settings = {r["key"]: r["value"] for r in cursor.fetchall()}
+
     backup = {
-        "version": "2.2",
+        "version": "2.3",
         "exported_at": datetime.datetime.now().isoformat(),
         "total_records": len(logs),
         "activity_logs": logs,
         "key_heatmap": keys,
         "mouse_heatmap": mouse,
-        "custom_rules": rules
+        "custom_rules": rules,
+        "app_budgets": budgets,
+        "settings": settings
     }
 
     with open(file_path, "w", encoding="utf-8") as f:

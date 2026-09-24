@@ -5,8 +5,8 @@ import signal
 import sys
 from pathlib import Path
 from .tracker import ActivityTracker
-from .db import init_db, is_paused_setting, get_stats_by_range, vacuum_and_cleanup_db
-from .wellbeing import BudgetEnforcer
+from .db import init_db, is_paused_setting, get_stats_by_range, vacuum_and_cleanup_db, get_break_reminder_minutes
+from .wellbeing import BudgetEnforcer, BreakReminder
 
 STATE_DIR = Path.home() / ".local" / "share" / "qhealth"
 STATE_FILE = STATE_DIR / "live_state.json"
@@ -19,6 +19,7 @@ class QHealthDaemon:
         init_db()
         self.tracker = ActivityTracker()
         self.budget_enforcer = BudgetEnforcer(self.tracker)
+        self.break_reminder = BreakReminder(self.tracker)
 
     def start(self):
         STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -58,6 +59,7 @@ class QHealthDaemon:
                         today_stats = get_stats_by_range("day")
                         today_dur = today_stats.get("total_duration", 0)
                         self.budget_enforcer.check()
+                        self.break_reminder.check(get_break_reminder_minutes())
                     except Exception:
                         pass
 

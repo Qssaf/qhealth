@@ -1,5 +1,6 @@
 import sys
 import json
+import datetime
 from pathlib import Path
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
@@ -9,7 +10,11 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QIcon, QAction
 
 from .tracker import ActivityTracker
-from .db import toggle_pause_setting, is_paused_setting, get_stats_by_range
+from .db import (
+    toggle_pause_setting, is_paused_setting, get_stats_by_range,
+    get_break_reminder_minutes, set_break_reminder_minutes, DEFAULT_BREAK_REMINDER_MINUTES,
+    export_data_to_json, export_data_to_csv
+)
 from qhealth_gui.main_window import QHealthMainWindow, create_app_icon
 from qhealth_gui.utils import format_duration, format_number
 
@@ -45,11 +50,12 @@ class QHealthApp:
 
         self.daemon_active = is_daemon_running()
         if not self.daemon_active:
-            from .wellbeing import BudgetEnforcer
+            from .wellbeing import BudgetEnforcer, BreakReminder
             self.tracker = ActivityTracker()
-            # Same budget warnings and enforcement the daemon would provide
+            # Same budget enforcement and break reminders the daemon would provide
             self.budget_enforcer = BudgetEnforcer(self.tracker)
-            self._run_budget_check()
+            self.break_reminder = BreakReminder(self.tracker)
+            self._run_wellbeing_checks()
             self.tracker.start()
             self._block_sync_timer = QTimer()
             self._block_sync_timer.timeout.connect(self._sync_standalone_tracker)
@@ -71,12 +77,16 @@ class QHealthApp:
             self.tracker = None
             self.window.tracker = None
             return
-        self._run_budget_check()
+        self._run_wellbeing_checks()
 
-    def _run_budget_check(self):
+    def _run_wellbeing_checks(self):
         # PyQt aborts the whole app on an exception escaping a slot; a busy DB must not do that
         try:
             self.budget_enforcer.check()
+        except Exception:
+            pass
+        try:
+            self.break_reminder.check(get_break_reminder_minutes())
         except Exception:
             pass
 
@@ -156,6 +166,23 @@ class QHealthApp:
         self.pause_action.triggered.connect(self._toggle_pause)
         self.tray_menu.addAction(self.pause_action)
 
+        self.break_action = QAction(f"Break Reminders (every {DEFAULT_BREAK_REMINDER_MINUTES} min)", self.app)
+        self.break_action.setCheckable(True)
+        try:
+            self.break_action.setChecked(get_break_reminder_minutes() > 0)
+        except Exception:
+            pass
+        self.break_action.toggled.connect(self._toggle_break_reminders)
+        self.tray_menu.addAction(self.break_action)
+
+        export_menu = self.tray_menu.addMenu("Export Data")
+        json_action = QAction("Full Backup (JSON)…", self.app)
+        json_action.triggered.connect(lambda: self._export("json"))
+        export_menu.addAction(json_action)
+        csv_action = QAction("Activity History (CSV)…", self.app)
+        csv_action.triggered.connect(lambda: self._export("csv"))
+        export_menu.addAction(csv_action)
+
         self.tray_menu.addSeparator()
 
         quit_action = QAction("Quit QHealth", self.app)
@@ -215,6 +242,29 @@ class QHealthApp:
         self.pause_action.setText("Resume Tracking" if new_paused else "Pause Tracking")
         self.window.btn_pause.setText("Resume" if new_paused else "Pause")
         self.window.btn_pause.setChecked(new_paused)
+
+    def _toggle_break_reminders(self, enabled: bool):
+        try:
+            set_break_reminder_minutes(DEFAULT_BREAK_REMINDER_MINUTES if enabled else 0)
+        except Exception:
+            pass
+
+    def _export(self, kind: str):
+        from PyQt6.QtWidgets import QFileDialog
+        stamp = datetime.date.today().isoformat()
+        name = f"qhealth-backup-{stamp}.json" if kind == "json" else f"qhealth-history-{stamp}.csv"
+        file_filter = "JSON (*.json)" if kind == "json" else "CSV (*.csv)"
+        path, _ = QFileDialog.getSaveFileName(None, "Export QHealth Data", str(Path.home() / name), file_filter)
+        if not path:
+            return
+        try:
+            if kind == "json":
+                export_data_to_json(path)
+            else:
+                export_data_to_csv(path)
+            self.tray.showMessage("QHealth", f"Exported to {path}", QSystemTrayIcon.MessageIcon.Information, 4000)
+        except Exception as e:
+            self.tray.showMessage("QHealth", f"Export failed: {e}", QSystemTrayIcon.MessageIcon.Warning, 6000)
 
     def show_window(self):
         self.window.show()

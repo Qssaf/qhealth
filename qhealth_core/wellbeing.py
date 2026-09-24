@@ -1,4 +1,5 @@
 import os
+import time
 import datetime
 import subprocess
 from pathlib import Path
@@ -9,6 +10,9 @@ from .blocker import force_close_app, send_block_notification
 
 # Highest first: when usage jumps past several thresholds at once, only the highest is announced
 BUDGET_ALERT_LEVELS = ("100", "1min", "80")
+
+# An input-free stretch this long counts as having taken a break
+BREAK_RESET_SECONDS = 5 * 60
 
 
 def send_notification(title: str, message: str, urgency: str = "normal"):
@@ -121,3 +125,30 @@ class BudgetEnforcer:
         if is_focused or kill_key not in self.notified:
             self.notified.add(kill_key)
             force_close_app(a_id, app_name, cur_pid)
+
+
+class BreakReminder:
+    """Reminds the user to take a break after N minutes of activity without a 5-minute pause."""
+
+    def __init__(self, tracker):
+        self.tracker = tracker
+        self.streak_start: Optional[float] = None
+
+    def check(self, interval_minutes: int, now: Optional[float] = None) -> bool:
+        """Returns True when a reminder was sent."""
+        now = time.monotonic() if now is None else now
+        if interval_minutes <= 0 or self.tracker.paused or now - self.tracker.last_input_time >= BREAK_RESET_SECONDS:
+            self.streak_start = None
+            return False
+        if self.streak_start is None:
+            self.streak_start = now
+            return False
+        if now - self.streak_start < interval_minutes * 60:
+            return False
+        self.streak_start = now
+        send_notification(
+            "QHealth — Time for a Break",
+            f"You've been active for {interval_minutes} minutes. Look away from the screen, "
+            "stretch and move around for a few minutes."
+        )
+        return True
