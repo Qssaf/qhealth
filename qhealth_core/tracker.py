@@ -10,7 +10,7 @@ import subprocess
 import collections
 from pathlib import Path
 from typing import Dict, Any, Optional
-from .db import record_activity_chunk, record_input_heatmap_chunk, init_db
+from .db import record_activity_chunk, record_input_heatmap_chunk, init_db, get_exceeded_app_budgets
 from .app_resolver import app_resolver
 from .blocker import force_close_app, send_block_notification
 
@@ -409,9 +409,17 @@ class ActivityTracker:
                             # Check if the focused app is exceeded and blocked
                             blocked_info = self.is_app_blocked(resolved.get("app_id", ""), raw_app, raw_cls)
                             if blocked_info and not is_qhealth:
+                                # The blocked set refreshes every 5s; re-read it so a "+15 min"
+                                # granted a moment ago lets the app open instead of killing it
+                                try:
+                                    self.update_blocked_apps(get_exceeded_app_budgets())
+                                    blocked_info = self.is_app_blocked(resolved.get("app_id", ""), raw_app, raw_cls)
+                                except Exception:
+                                    pass
+                            if blocked_info and not is_qhealth:
                                 target_id = resolved.get("app_id", raw_app)
                                 app_name = resolved.get("display_name", raw_app or "Application")
-                                limit_mins = blocked_info.get("daily_limit_minutes", 0)
+                                limit_mins = blocked_info.get("effective_limit_minutes", blocked_info.get("daily_limit_minutes", 0))
                                 force_close_app(target_id, app_name, pid)
                                 send_block_notification(app_name, limit_mins, target_id, is_reopen=True)
 

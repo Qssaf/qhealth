@@ -313,14 +313,15 @@ class QHealthMainWindow(QMainWindow):
             pass
 
     def _on_db_timer(self):
-        # Ranges ending on a past date can't change, so only explicit navigation reloads them
-        if self.selected_date < self._today_str:
+        self._roll_over_midnight()
+        # Ranges ending on a past date can't change, so only explicit navigation reloads them.
+        # All Time and the Input page's today-anchored calendar still include today.
+        if (self.selected_date < self._today_str and self.current_range != "all_time"
+                and self.main_stack.currentIndex() != 1):
             return
         self._poll_db()
 
-    def _poll_db(self):
-        if not self.isVisible():
-            return
+    def _roll_over_midnight(self):
         today_str = datetime.date.today().strftime("%Y-%m-%d")
         if today_str != self._today_str:
             # Window left open past midnight: follow "today" if the user was viewing it
@@ -328,6 +329,11 @@ class QHealthMainWindow(QMainWindow):
                 self.selected_date = today_str
                 self.date_btn.set_date_str(today_str)
             self._today_str = today_str
+
+    def _poll_db(self):
+        if not self.isVisible():
+            return
+        self._roll_over_midnight()
         try:
             stats = get_stats_by_range(self.current_range, self.selected_date)
             total_seconds = stats.get("total_duration", 0)

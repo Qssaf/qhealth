@@ -504,7 +504,11 @@ class AppDetailView(QWidget):
         if limit_mins is None:
             limit_mins = 0
         block_on_exceed = self.block_checkbox.isChecked() if limit_mins > 0 else True
-        set_app_budget(self.current_app_id, limit_mins, enabled=(limit_mins > 0), block_on_exceed=block_on_exceed)
+        # PyQt aborts the app on an exception escaping a slot; a locked DB must not do that
+        try:
+            set_app_budget(self.current_app_id, limit_mins, enabled=(limit_mins > 0), block_on_exceed=block_on_exceed)
+        except Exception:
+            return
         self.block_checkbox.setVisible(limit_mins > 0)
         self._update_budget_ui(self._last_duration, limit_mins, self._last_range_type)
 
@@ -512,12 +516,18 @@ class AppDetailView(QWidget):
         if self._is_updating or not self.current_app_id:
             return
         limit_mins = self.budget_combo.currentData() or 0
-        set_app_budget(self.current_app_id, limit_mins, enabled=(limit_mins > 0), block_on_exceed=checked)
+        try:
+            set_app_budget(self.current_app_id, limit_mins, enabled=(limit_mins > 0), block_on_exceed=checked)
+        except Exception:
+            pass
 
     def _on_extend_clicked(self):
         if not self.current_app_id:
             return
-        extend_app_budget(self.current_app_id, EXTENSION_MINUTES)
+        try:
+            extend_app_budget(self.current_app_id, EXTENSION_MINUTES)
+        except Exception:
+            return
         self._last_extra_minutes += EXTENSION_MINUTES
         self._update_budget_ui(self._last_duration, self.budget_combo.currentData() or 0, self._last_range_type)
 

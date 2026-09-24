@@ -30,7 +30,7 @@ PlasmoidItem {
                 return;
             }
             if (data["exit code"] !== 0) {
-                // Daemon stopped: it removes live_state.json on a clean shutdown
+                // File missing (clean shutdown) or older than 10s (daemon crashed or was killed)
                 root.isOffline = true;
                 return;
             }
@@ -46,7 +46,9 @@ PlasmoidItem {
         }
     }
 
-    readonly property string stateCommand: "cat \"$HOME/.local/share/qhealth/live_state.json\""
+    // The daemon rewrites the file every second, so a file older than 10s is stale
+    readonly property string stateCommand: "f=\"$HOME/.local/share/qhealth/live_state.json\"; "
+        + "[ $(( $(date +%s) - $(stat -c %Y \"$f\") )) -lt 10 ] && cat \"$f\""
 
     function refreshStats() {
         shell.connectSource(root.stateCommand);

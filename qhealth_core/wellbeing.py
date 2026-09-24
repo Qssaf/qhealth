@@ -75,7 +75,10 @@ class BudgetEnforcer:
             if level and f"{key_prefix}_{level}" not in self.notified:
                 for lower in BUDGET_ALERT_LEVELS[BUDGET_ALERT_LEVELS.index(level):]:
                     self.notified.add(f"{key_prefix}_{lower}")
-                self._announce(level, app_name, a_id, int(used_secs // 60), limit_mins, block)
+                # After "+15 min" usage is already >= 80% of the new limit for any base of 60m+;
+                # the user just asked for more time, so only the 1-minute and limit alerts matter.
+                if not (level == "80" and info["extra_minutes"] > 0):
+                    self._announce(level, app_name, a_id, int(used_secs // 60), limit_mins, block)
 
             if a_id in exceeded and block:
                 self._enforce(a_id, app_name, f"{key_prefix}_kill")
@@ -133,11 +136,18 @@ class BreakReminder:
     def __init__(self, tracker):
         self.tracker = tracker
         self.streak_start: Optional[float] = None
+        self._last_check_boottime: Optional[float] = None
 
-    def check(self, interval_minutes: int, now: Optional[float] = None) -> bool:
+    def check(self, interval_minutes: int, now: Optional[float] = None, boot_now: Optional[float] = None) -> bool:
         """Returns True when a reminder was sent."""
         now = time.monotonic() if now is None else now
-        if interval_minutes <= 0 or self.tracker.paused or now - self.tracker.last_input_time >= BREAK_RESET_SECONDS:
+        boot_now = time.clock_gettime(time.CLOCK_BOOTTIME) if boot_now is None else boot_now
+        # CLOCK_MONOTONIC (used for input times) stops during suspend; CLOCK_BOOTTIME doesn't,
+        # so a long gap between checks means the machine slept, which counts as a break.
+        slept = self._last_check_boottime is not None and boot_now - self._last_check_boottime >= BREAK_RESET_SECONDS
+        self._last_check_boottime = boot_now
+        if (interval_minutes <= 0 or self.tracker.paused or slept
+                or now - self.tracker.last_input_time >= BREAK_RESET_SECONDS):
             self.streak_start = None
             return False
         if self.streak_start is None:

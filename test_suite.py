@@ -434,6 +434,25 @@ class TestGUIWidgets(unittest.TestCase):
         self.GlowingDatePickerBtn = GlowingDatePickerBtn
         self.QHealthMainWindow = QHealthMainWindow
 
+    def test_midnight_rollover_while_viewing_past_date(self):
+        win = self.QHealthMainWindow(None)
+        win.show()
+        today = datetime.date.today()
+        d = lambda n: (today - datetime.timedelta(days=n)).strftime("%Y-%m-%d")
+        # Opened yesterday, viewing the day before; midnight has since passed
+        win._today_str, win.selected_date = d(1), d(2)
+        with unittest.mock.patch.object(win, "_poll_db") as poll:
+            win._on_db_timer()
+            poll.assert_not_called()          # past day range: nothing to refresh
+            self.assertEqual(win._today_str, d(0))
+            win.current_range = "all_time"    # still includes today
+            win._on_db_timer()
+            poll.assert_called_once()
+        win.current_range = "day"
+        win._on_date_changed(d(1))            # picking yesterday must stay on yesterday
+        self.assertEqual(win.selected_date, d(1))
+        win.close()
+
     def test_budget_extension_button(self):
         today = datetime.date.today().strftime("%Y-%m-%d")
         db.set_app_budget("steam", 30)
@@ -664,6 +683,12 @@ class TestBudgetEnforcer(unittest.TestCase):
         self.mocks["close"].assert_not_called()  # block_on_exceed off
         self.assertNotIn("steam", self.enforcer.tracker.blocked_app_ids)
 
+    def test_no_80_percent_alert_right_after_extension(self):
+        self.enforcer.check(self._usage(3600, limit=60))            # limit reached
+        self.mocks["note"].reset_mock()
+        self.enforcer.check(self._usage(3605, limit=60, extra=15))  # 80% of the new 75m limit
+        self.mocks["note"].assert_not_called()
+
     def test_extension_unblocks_and_rearms_warnings(self):
         self.enforcer.check(self._usage(600))
         self.assertIn("steam", self.enforcer.tracker.blocked_app_ids)
@@ -708,6 +733,18 @@ class TestBreakReminder(unittest.TestCase):
         self.assertFalse(self._at(80 * 60))
         self.assertTrue(self._at(100 * 60))
 
+    def test_suspend_counts_as_break(self):
+        # CLOCK_MONOTONIC (input times) stops while suspended; CLOCK_BOOTTIME keeps going
+        self.reminder.check(50, now=0, boot_now=0)
+        self.tracker.last_input_time = 45 * 60
+        self.reminder.check(50, now=45 * 60, boot_now=45 * 60)
+        self.tracker.last_input_time = 45 * 60 + 10
+        # 8 hours asleep: monotonic barely moved, boottime jumped
+        self.assertFalse(self.reminder.check(50, now=45 * 60 + 10, boot_now=45 * 60 + 8 * 3600))
+        self.tracker.last_input_time = 50 * 60
+        self.assertFalse(self.reminder.check(50, now=50 * 60, boot_now=50 * 60 + 8 * 3600))
+        self.notify.assert_not_called()
+
     def test_off_or_paused(self):
         self._at(0, minutes=0)
         self.assertFalse(self._at(999 * 60, minutes=0))
@@ -715,6 +752,52 @@ class TestBreakReminder(unittest.TestCase):
         self.tracker.paused = True
         self.assertFalse(self._at(60 * 60))
         self.notify.assert_not_called()
+
+class TestFocusHookBlocking(unittest.TestCase):
+    def _focus(self, tracker, app):
+        import json as _json
+        line = "QHEALTH_FOCUS:" + _json.dumps({"app": app, "title": "t", "cls": app, "pid": 999}) + "\n"
+
+        class FakeProc:
+            def __init__(self):
+                self.lines = [line]
+                self.stdout = self
+            def readline(self):
+                if self.lines:
+                    return self.lines.pop(0)
+                tracker.running = False
+                return ""
+            def terminate(self):
+                pass
+            def wait(self, timeout=None):
+                pass
+
+        tracker.running = True
+        with unittest.mock.patch.object(type(tracker), "_inject_kwin_script", return_value=True), \
+             unittest.mock.patch("qhealth_core.tracker.subprocess.Popen", return_value=FakeProc()):
+            tracker._kwin_loop()
+
+    @unittest.mock.patch("qhealth_core.tracker.send_block_notification")
+    @unittest.mock.patch("qhealth_core.tracker.force_close_app")
+    def test_fresh_extension_is_honoured_and_limit_reported(self, mock_close, mock_note):
+        from qhealth_core.tracker import ActivityTracker
+        db.set_app_budget("focusgame", 1)
+        self.addCleanup(db.set_app_budget, "focusgame", 0, False)
+        db.record_activity_chunk("focusgame", "Focusgame", "t", 120, 0, 0, 0, "Gaming")
+        tracker = ActivityTracker()
+        tracker.update_blocked_apps(db.get_exceeded_app_budgets())
+
+        # Blocked: killed, and the message uses the effective limit
+        self._focus(tracker, "focusgame")
+        mock_close.assert_called_once()
+        self.assertEqual(mock_note.call_args.args[1], 1)
+
+        # "+15 min" granted less than 5s ago: the stale blocked set must not kill it
+        db.extend_app_budget("focusgame", 15)
+        tracker.update_blocked_apps({"focusgame": {"daily_limit_minutes": 1, "block_on_exceed": True}})
+        self._focus(tracker, "focusgame")
+        self.assertEqual(mock_close.call_count, 1)
+        self.assertEqual(tracker.current_raw_app, "focusgame")
 
 class TestKWinScriptRecovery(unittest.TestCase):
     def _run(self, returncode, stdout):
