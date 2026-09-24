@@ -27,6 +27,11 @@ QHealth is a native, offline screen time and hardware activity tracker crafted s
 - SQLite configuration: WAL mode, `busy_timeout=5000`, `synchronous=NORMAL`, `mmap_size=64MB`.
 - Inactive / idle threshold: Screen time only increments when physical input occurs; auto-pauses after 60s of inactivity.
 - Excluded window IDs: `desktop`, `plasmashell`, `krunner`, `idle`.
+- `daily_app_totals` holds per-day (date, app, category) sums of `activity_log`. SQLite triggers keep it exact. Never write it directly; write `activity_log` and let the triggers update it. Week/month/year/all-time stats, streaks and heatmaps read it. Day view and per-title breakdowns read `activity_log`.
+- `budget_extensions` stores per-day extra minutes ("+15 min today"). Effective limit = `daily_limit_minutes` + that day's extension.
+
+### 3. Wellbeing Logic (`qhealth_core/wellbeing.py`)
+- `BudgetEnforcer` (80% / 1-minute / limit alerts, force-close) and `BreakReminder` run in the daemon. The GUI runs them only when it tracks on its own (no daemon). Keep budget logic here, not in `daemon.py`.
 
 ---
 
