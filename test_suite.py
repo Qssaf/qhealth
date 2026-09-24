@@ -15,6 +15,12 @@ from qhealth_core.app_resolver import app_resolver
 from qhealth_core import db
 from qhealth_gui.utils import format_duration, format_number, get_category_color, get_app_icon_pixmap
 
+# Never touch the real ~/.local/share/qhealth database: every test (including ones that
+# only build an ActivityTracker or resolve apps) uses a throwaway DB by default.
+_TEST_DB_DIR = tempfile.TemporaryDirectory()
+db.DB_DIR = Path(_TEST_DB_DIR.name)
+db.DB_PATH = db.DB_DIR / "qhealth.db"
+
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 
@@ -562,6 +568,63 @@ class TestDaemonBudgetEnforcement(unittest.TestCase):
         self._run(d, mock_close)
         mock_close.assert_called_once_with("steam", "Steam", None)
         self.assertEqual(d.tracker.current_pid, 777)
+
+class TestDailyRollup(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.orig = (db.DB_DIR, db.DB_PATH)
+        db.DB_DIR = Path(self.temp_dir.name)
+        db.DB_PATH = db.DB_DIR / "rollup.db"
+        db.init_db(force=True)
+
+    def tearDown(self):
+        db.DB_DIR, db.DB_PATH = self.orig
+        self.temp_dir.cleanup()
+
+    def _assert_rollup_exact(self):
+        with db.get_db() as conn:
+            expected = sorted(tuple(r) for r in conn.execute(
+                "SELECT date_str, app_id, category, SUM(duration_seconds), SUM(keystrokes), SUM(clicks), SUM(scrolls) "
+                "FROM activity_log GROUP BY 1, 2, 3"))
+            actual = sorted(tuple(r) for r in conn.execute(
+                "SELECT date_str, app_id, category, duration_seconds, keystrokes, clicks, scrolls FROM daily_app_totals"))
+        self.assertEqual(actual, expected)
+
+    def test_rollup_tracks_every_write_path(self):
+        for i in range(6):  # first insert, then upsert-update of the same row
+            db.record_activity_chunk("code", "VS Code", f"file{i % 2}.py", 5, 2, 1, 0, "Development")
+        db.record_activity_chunk("reader", "Reader", "doc", 0, 0, 0, 3, "Other")
+        self._assert_rollup_exact()
+
+        with db.get_db() as conn:
+            conn.execute("UPDATE activity_log SET date_str = '2020-01-01' WHERE window_title = 'file1.py'")
+            conn.commit()
+        self._assert_rollup_exact()
+
+        db.set_custom_app_rule("code", "Productivity")  # rewrites category on history
+        self._assert_rollup_exact()
+
+        with db.get_db() as conn:
+            conn.execute("DELETE FROM activity_log WHERE app_id = 'reader'")
+            conn.commit()
+        self._assert_rollup_exact()
+
+        stats = db.get_stats_by_range("year")
+        self.assertEqual(stats["total_duration"], 15)
+        self.assertEqual(stats["categories"][0]["category"], "Productivity")
+
+    def test_backfill_existing_history_once(self):
+        db.record_activity_chunk("steam", "Steam", "game", 120, 0, 5, 0, "Gaming")
+        with db.get_db() as conn:
+            # Simulate a database created before the rollup existed
+            conn.execute("DROP TRIGGER trg_rollup_insert")
+            conn.execute("DELETE FROM daily_app_totals")
+            conn.execute("PRAGMA user_version = 0")
+            conn.commit()
+        db.init_db(force=True)
+        db.init_db(force=True)  # a second start must not add the history again
+        self._assert_rollup_exact()
+        self.assertEqual(db.get_stats_by_range("week")["total_duration"], 120)
 
 class TestDaemonDetection(unittest.TestCase):
     def test_stale_pid_file_with_recycled_pid(self):

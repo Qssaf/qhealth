@@ -86,6 +86,90 @@ def get_category_for_app(app_id: str, app_name: str) -> str:
 
 _db_initialized = False
 
+ROLLUP_SCHEMA_VERSION = 1
+
+def _rollup_add_sql(sign: str, row: str) -> str:
+    """SQL that adds (sign '+') or subtracts (sign '-') trigger row `row` (NEW/OLD) into daily_app_totals."""
+    # NOT EXISTS instead of INSERT OR IGNORE: an outer statement's conflict policy
+    # (e.g. INSERT OR REPLACE) would override OR IGNORE inside the trigger body.
+    return f"""
+        INSERT INTO daily_app_totals (date_str, app_id, category)
+        SELECT {row}.date_str, {row}.app_id, {row}.category
+        WHERE NOT EXISTS (
+            SELECT 1 FROM daily_app_totals
+            WHERE date_str = {row}.date_str AND app_id = {row}.app_id AND category = {row}.category
+        );
+        UPDATE daily_app_totals SET
+            duration_seconds = duration_seconds {sign} {row}.duration_seconds,
+            keystrokes = keystrokes {sign} {row}.keystrokes,
+            clicks = clicks {sign} {row}.clicks,
+            scrolls = scrolls {sign} {row}.scrolls
+        WHERE date_str = {row}.date_str AND app_id = {row}.app_id AND category = {row}.category;
+    """
+
+_ROLLUP_PRUNE_OLD_SQL = """
+        DELETE FROM daily_app_totals
+        WHERE date_str = OLD.date_str AND app_id = OLD.app_id AND category = OLD.category
+          AND duration_seconds = 0 AND keystrokes = 0 AND clicks = 0 AND scrolls = 0;
+"""
+
+def _init_daily_rollup(conn: sqlite3.Connection):
+    """
+    Per-day totals of activity_log, kept exact by triggers so week/month/year views scan
+    a few thousand rows instead of every hourly/per-title row. Triggers (not Python code)
+    keep it in sync, so it stays correct even while an older daemon build is writing.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        # Re-check under the write lock so a concurrently starting daemon/GUI can't backfill twice
+        if conn.execute("PRAGMA user_version").fetchone()[0] < ROLLUP_SCHEMA_VERSION:
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS daily_app_totals (
+                date_str TEXT NOT NULL,
+                app_id TEXT NOT NULL,
+                category TEXT NOT NULL,
+                duration_seconds INTEGER NOT NULL DEFAULT 0,
+                keystrokes INTEGER NOT NULL DEFAULT 0,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                scrolls INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (date_str, app_id, category)
+            ) WITHOUT ROWID
+            """)
+            conn.execute(f"""
+            CREATE TRIGGER IF NOT EXISTS trg_rollup_insert AFTER INSERT ON activity_log BEGIN
+                {_rollup_add_sql('+', 'NEW')}
+            END
+            """)
+            conn.execute(f"""
+            CREATE TRIGGER IF NOT EXISTS trg_rollup_update
+            AFTER UPDATE OF date_str, app_id, category, duration_seconds, keystrokes, clicks, scrolls ON activity_log
+            BEGIN
+                {_rollup_add_sql('-', 'OLD')}
+                {_rollup_add_sql('+', 'NEW')}
+                {_ROLLUP_PRUNE_OLD_SQL}
+            END
+            """)
+            conn.execute(f"""
+            CREATE TRIGGER IF NOT EXISTS trg_rollup_delete AFTER DELETE ON activity_log BEGIN
+                {_rollup_add_sql('-', 'OLD')}
+                {_ROLLUP_PRUNE_OLD_SQL}
+            END
+            """)
+            conn.execute("DELETE FROM daily_app_totals")
+            conn.execute("""
+            INSERT INTO daily_app_totals (date_str, app_id, category, duration_seconds, keystrokes, clicks, scrolls)
+            SELECT date_str, app_id, category,
+                   SUM(duration_seconds), SUM(keystrokes), SUM(clicks), SUM(scrolls)
+            FROM activity_log
+            GROUP BY date_str, app_id, category
+            HAVING SUM(duration_seconds) != 0 OR SUM(keystrokes) != 0 OR SUM(clicks) != 0 OR SUM(scrolls) != 0
+            """)
+            conn.execute(f"PRAGMA user_version = {ROLLUP_SCHEMA_VERSION}")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
 def init_db(force: bool = False):
     global _db_initialized
     if _db_initialized and not force:
@@ -116,11 +200,15 @@ def init_db(force: bool = False):
         """)
         
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_date ON activity_log(date_str)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_app ON activity_log(app_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_category ON activity_log(category)")
+        # Unused by any query (app_id is the prefix of idx_act_app_date_dur; nothing filters
+        # on category); they only add write cost on every 5s flush.
+        cursor.execute("DROP INDEX IF EXISTS idx_activity_app")
+        cursor.execute("DROP INDEX IF EXISTS idx_activity_category")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_act_app_date_dur ON activity_log(app_id, date_str, duration_seconds)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_act_date_dur ON activity_log(date_str, duration_seconds)")
-        
+
+        _init_daily_rollup(conn)
+
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS custom_app_rules (
             app_id TEXT PRIMARY KEY,
@@ -248,7 +336,7 @@ def get_activity_streak_stats() -> Dict[str, Any]:
         cursor = conn.cursor()
         cursor.execute(f"""
         SELECT DISTINCT date_str
-        FROM activity_log
+        FROM daily_app_totals
         WHERE LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL} AND duration_seconds > 0
         ORDER BY date_str DESC
         """)
@@ -258,7 +346,7 @@ def get_activity_streak_stats() -> Dict[str, Any]:
         SELECT 
             COALESCE(SUM(duration_seconds), 0) as total_dur,
             COALESCE(SUM(keystrokes), 0) as total_keys
-        FROM activity_log
+        FROM daily_app_totals
         WHERE LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         """)
         totals = cursor.fetchone()
@@ -552,35 +640,48 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
             date_condition = "date_str = ?"
             params = [target_date]
 
-        # 1. Total Summary
-        cursor.execute(f"""
-        SELECT 
-            COALESCE(SUM(duration_seconds), 0) as total_duration,
-            COALESCE(SUM(keystrokes), 0) as total_keystrokes,
-            COALESCE(SUM(clicks), 0) as total_clicks,
-            COALESCE(SUM(scrolls), 0) as total_scrolls
-        FROM activity_log
-        WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
-        """, params)
-        total_row = cursor.fetchone()
-        total_duration = total_row["total_duration"]
+        # Single pass over the range (hourly rows for a day, per-day rollups otherwise);
+        # totals, app/category breakdowns and the timeline are all folded from it.
+        if range_type == "day":
+            source, bucket = "activity_log", "hour_int"
+        elif range_type in ("week", "month"):
+            source, bucket = "daily_app_totals", "date_str"
+        else:
+            source, bucket = "daily_app_totals", "SUBSTR(date_str, 1, 7)"
 
-        # 2. App Breakdown
         cursor.execute(f"""
-        SELECT 
+        SELECT
+            {bucket} AS bucket,
             app_id,
-            app_name,
             category,
-            SUM(duration_seconds) as duration,
-            SUM(keystrokes) as keystrokes,
-            SUM(clicks) as clicks,
-            SUM(scrolls) as scrolls
-        FROM activity_log
+            SUM(duration_seconds) AS duration,
+            SUM(keystrokes) AS keystrokes,
+            SUM(clicks) AS clicks,
+            SUM(scrolls) AS scrolls
+        FROM {source}
         WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
-        GROUP BY app_id
-        ORDER BY duration DESC
+        GROUP BY bucket, app_id, category
         """, params)
-        apps = [dict(row) for row in cursor.fetchall()]
+        rows = cursor.fetchall()
+
+        metric_keys = ("duration", "keystrokes", "clicks", "scrolls")
+        totals = dict.fromkeys(metric_keys, 0)
+        app_map: Dict[str, Dict[str, Any]] = {}
+        cat_map: Dict[str, Dict[str, Any]] = {}
+        bucket_map: Dict[Any, Dict[str, int]] = {}
+        for r in rows:
+            app = app_map.setdefault(r["app_id"], {"app_id": r["app_id"], "app_name": "", "category": r["category"], **dict.fromkeys(metric_keys, 0)})
+            cat = cat_map.setdefault(r["category"], {"category": r["category"], "duration": 0, "keystrokes": 0, "clicks": 0})
+            slot = bucket_map.setdefault(r["bucket"], {"duration": 0, "keystrokes": 0, "clicks": 0})
+            for k in metric_keys:
+                totals[k] += r[k]
+                app[k] += r[k]
+                if k != "scrolls":
+                    cat[k] += r[k]
+                    slot[k] += r[k]
+
+        total_duration = totals["duration"]
+        apps = sorted(app_map.values(), key=lambda a: a["duration"], reverse=True)
         budgets = get_all_app_budgets()
 
         for app in apps:
@@ -617,60 +718,26 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
                 app["budget_percentage"] = None
                 app["block_on_exceed"] = False
 
-        # 3. Category Breakdown
-        cursor.execute(f"""
-        SELECT 
-            category,
-            SUM(duration_seconds) as duration,
-            SUM(keystrokes) as keystrokes,
-            SUM(clicks) as clicks
-        FROM activity_log
-        WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
-        GROUP BY category
-        ORDER BY duration DESC
-        """, params)
-        categories = [dict(row) for row in cursor.fetchall()]
+        # Category Breakdown
+        categories = sorted(cat_map.values(), key=lambda c: c["duration"], reverse=True)
         for cat in categories:
             cat["percentage"] = round((cat["duration"] / total_duration * 100), 1) if total_duration > 0 else 0.0
 
-        # 4. Hourly or Daily Trend Distribution
+        # Hourly or Daily Trend Distribution
+        empty_slot = {"duration": 0, "keystrokes": 0, "clicks": 0}
         if range_type == "day":
-            cursor.execute(f"""
-            SELECT 
-                hour_int,
-                SUM(duration_seconds) as duration,
-                SUM(keystrokes) as keystrokes,
-                SUM(clicks) as clicks
-            FROM activity_log
-            WHERE date_str = ? AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
-            GROUP BY hour_int
-            ORDER BY hour_int ASC
-            """, (target_date,))
-            hourly_map = {row["hour_int"]: dict(row) for row in cursor.fetchall()}
             timeline = []
             for h in range(24):
-                entry = dict(hourly_map.get(h, {"hour_int": h, "duration": 0, "keystrokes": 0, "clicks": 0}))
-                entry["duration"] = min(3600, int(entry.get("duration", 0)))
+                entry = {"hour_int": h, **bucket_map.get(h, empty_slot)}
+                entry["duration"] = min(3600, int(entry["duration"]))
                 timeline.append(entry)
         elif range_type in ("week", "month"):
             num_days = 7 if range_type == "week" else 30
-            cursor.execute(f"""
-            SELECT 
-                date_str,
-                SUM(duration_seconds) as duration,
-                SUM(keystrokes) as keystrokes,
-                SUM(clicks) as clicks
-            FROM activity_log
-            WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
-            GROUP BY date_str
-            ORDER BY date_str ASC
-            """, params)
-            day_map = {row["date_str"]: dict(row) for row in cursor.fetchall()}
             timeline = []
             for i in range(num_days - 1, -1, -1):
                 d_obj = anchor_date - datetime.timedelta(days=i)
                 d = d_obj.strftime("%Y-%m-%d")
-                entry = day_map.get(d, {"duration": 0, "keystrokes": 0, "clicks": 0})
+                entry = bucket_map.get(d, empty_slot)
                 timeline.append({
                     "date": d,
                     "label": d_obj.strftime("%a") if range_type == "week" else d[-5:],
@@ -680,18 +747,6 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
                 })
         else:
             # 12-Month slots for Year and All-Time
-            cursor.execute(f"""
-            SELECT 
-                SUBSTR(date_str, 1, 7) as month_str,
-                SUM(duration_seconds) as duration,
-                SUM(keystrokes) as keystrokes,
-                SUM(clicks) as clicks
-            FROM activity_log
-            WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
-            GROUP BY month_str
-            ORDER BY month_str ASC
-            """, params)
-            month_map = {row["month_str"]: dict(row) for row in cursor.fetchall()}
             timeline = []
             cur_year = anchor_date.year
             cur_month = anchor_date.month
@@ -703,7 +758,7 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
                     y -= 1
                 m_str = f"{y:04d}-{m_offset:02d}"
                 d_sample = datetime.date(y, m_offset, 1)
-                entry = month_map.get(m_str, {"duration": 0, "keystrokes": 0, "clicks": 0})
+                entry = bucket_map.get(m_str, empty_slot)
                 timeline.append({
                     "month_str": m_str,
                     "label": d_sample.strftime("%b"),
@@ -734,9 +789,9 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
         "range_type": range_type,
         "target_date": target_date,
         "total_duration": total_duration,
-        "total_keystrokes": total_row["total_keystrokes"],
-        "total_clicks": total_row["total_clicks"],
-        "total_scrolls": total_row["total_scrolls"],
+        "total_keystrokes": totals["keystrokes"],
+        "total_clicks": totals["clicks"],
+        "total_scrolls": totals["scrolls"],
         "focus_score": focus_score,
         "focus_rating": focus_rating,
         "apps": apps,
@@ -757,7 +812,7 @@ def get_activity_heatmap_data(days: int = 70) -> List[Dict[str, Any]]:
             SUM(duration_seconds) as duration,
             SUM(keystrokes) as keystrokes,
             SUM(clicks) as clicks
-        FROM activity_log
+        FROM daily_app_totals
         WHERE date_str >= ? AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         GROUP BY date_str
         ORDER BY date_str ASC
@@ -1250,7 +1305,7 @@ def get_month_activity_map(year: int, month: int) -> Dict[str, Dict[str, Any]]:
             SUM(duration_seconds) as duration,
             SUM(keystrokes) as keystrokes,
             SUM(clicks) as clicks
-        FROM activity_log
+        FROM daily_app_totals
         WHERE date_str LIKE ? AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         GROUP BY date_str
         """, (prefix,))

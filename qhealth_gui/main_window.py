@@ -150,7 +150,7 @@ class QHealthMainWindow(QMainWindow):
         self.live_timer.start(3000)
 
         self.db_timer = QTimer(self)
-        self.db_timer.timeout.connect(self._poll_db)
+        self.db_timer.timeout.connect(self._on_db_timer)
         self.db_timer.start(3000)
 
         # Initial Load
@@ -285,6 +285,8 @@ class QHealthMainWindow(QMainWindow):
     def _on_back_to_apps_list(self):
         self.active_drilldown_app_id = ""
         self.apps_sub_stack.setCurrentIndex(0)
+        # Reflect a budget edited in the detail view right away
+        self._poll_db()
 
     def _poll_live(self):
         if not self.isVisible():
@@ -309,6 +311,12 @@ class QHealthMainWindow(QMainWindow):
                     self.btn_pause.setText("Resume" if metrics.get("is_paused") else "Pause")
         except Exception:
             pass
+
+    def _on_db_timer(self):
+        # Ranges ending on a past date can't change, so only explicit navigation reloads them
+        if self.selected_date < self._today_str:
+            return
+        self._poll_db()
 
     def _poll_db(self):
         if not self.isVisible():
@@ -365,9 +373,10 @@ class QHealthMainWindow(QMainWindow):
                     keys, clicks, scrolls, key_heatmap, mouse_heatmap, calendar_heatmap, timeline, self.current_range
                 )
 
-            # Update Applications Page (Leaderboard & Active Drilldown)
-            self.apps_leaderboard.update_apps(apps)
-            if self.apps_sub_stack.currentIndex() == 1 and self.active_drilldown_app_id:
+            # Update Applications Page only while visible (refreshed on page switch)
+            if self.main_stack.currentIndex() == 2:
+                self.apps_leaderboard.update_apps(apps)
+            if self.main_stack.currentIndex() == 2 and self.apps_sub_stack.currentIndex() == 1 and self.active_drilldown_app_id:
                 detail_stats = get_app_detail_stats(self.active_drilldown_app_id, self.current_range, self.selected_date)
                 self.app_detail_view.set_app_data(detail_stats, self.current_range)
         except Exception:
