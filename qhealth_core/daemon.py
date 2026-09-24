@@ -6,8 +6,13 @@ import sys
 import datetime
 import subprocess
 from pathlib import Path
+from typing import Optional
 from .tracker import ActivityTracker
-from .db import init_db, is_paused_setting, get_stats_by_range, get_all_app_budgets, vacuum_and_cleanup_db
+from .db import (
+    init_db, is_paused_setting, get_stats_by_range,
+    get_all_app_budgets, get_exceeded_app_budgets, vacuum_and_cleanup_db
+)
+from .blocker import force_close_app, send_block_notification
 
 STATE_DIR = Path.home() / ".local" / "share" / "qhealth"
 STATE_FILE = STATE_DIR / "live_state.json"
@@ -58,7 +63,9 @@ class QHealthDaemon:
                     try:
                         today_stats = get_stats_by_range("day")
                         today_dur = today_stats.get("total_duration", 0)
-                        self._check_budget_limits(today_stats)
+                        exceeded = get_exceeded_app_budgets()
+                        self.tracker.update_blocked_apps(exceeded)
+                        self._check_budget_limits(today_stats, exceeded)
                     except Exception:
                         pass
 
@@ -95,11 +102,14 @@ class QHealthDaemon:
         finally:
             self.stop()
 
-    def _check_budget_limits(self, stats: dict):
+    def _check_budget_limits(self, stats: dict, exceeded: Optional[dict] = None):
         today_str = datetime.date.today().strftime("%Y-%m-%d")
         if self.notified_budget_alerts:
             self.notified_budget_alerts = {k for k in self.notified_budget_alerts if k.startswith(today_str)}
         budgets = get_all_app_budgets()
+        if exceeded is None:
+            exceeded = get_exceeded_app_budgets()
+
         for app in stats.get("apps", []):
             a_id = app.get("app_id", "").lower()
             b_info = budgets.get(a_id)
@@ -121,10 +131,27 @@ class QHealthDaemon:
             # 100% Threshold
             if dur_mins >= limit_mins and f"{today_str}_{a_id}_100" not in self.notified_budget_alerts:
                 self.notified_budget_alerts.add(f"{today_str}_{a_id}_100")
-                self._send_notification(
-                    f"QHealth — Daily Budget Exceeded",
-                    f"{app_name} limit reached ({int(dur_mins)}m / {limit_mins}m)!"
-                )
+                block_on_exceed = bool(b_info.get("block_on_exceed", 1))
+                if block_on_exceed:
+                    send_block_notification(app_name, limit_mins, a_id, is_reopen=False)
+                else:
+                    self._send_notification(
+                        f"QHealth — Daily Budget Exceeded",
+                        f"{app_name} limit reached ({int(dur_mins)}m / {limit_mins}m)!"
+                    )
+
+            # Enforcement: If exceeded and block enabled, ensure app processes are terminated
+            if a_id in exceeded and b_info.get("block_on_exceed", 1):
+                cur_pid = None
+                with self.tracker.window_lock:
+                    cur_app_id = self.tracker.resolved_app_info.get("app_id", "").lower()
+                    cur_raw = self.tracker.current_raw_app.lower()
+                    if cur_app_id == a_id or cur_raw == a_id or a_id.endswith(cur_raw) or cur_raw.endswith(a_id):
+                        cur_pid = getattr(self.tracker, "current_pid", None)
+                        self.tracker.current_raw_app = ""
+                        self.tracker.current_title = ""
+                        self.tracker.current_pid = 0
+                force_close_app(a_id, app_name, cur_pid)
 
     def _send_notification(self, title: str, message: str):
         try:

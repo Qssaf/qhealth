@@ -45,8 +45,13 @@ class QHealthApp:
 
         self.daemon_active = is_daemon_running()
         if not self.daemon_active:
+            from .db import get_exceeded_app_budgets
             self.tracker = ActivityTracker()
+            self.tracker.update_blocked_apps(get_exceeded_app_budgets())
             self.tracker.start()
+            self._block_sync_timer = QTimer()
+            self._block_sync_timer.timeout.connect(lambda: self.tracker.update_blocked_apps(get_exceeded_app_budgets()))
+            self._block_sync_timer.start(5000)
         else:
             self.tracker = None
 

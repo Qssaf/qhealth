@@ -44,8 +44,14 @@ class AppRowWidget(QFrame):
         budget_mins = app_data.get("budget_minutes")
         if budget_mins:
             b_pct = app_data.get("budget_percentage", 0)
-            b_color = "#34d399" if b_pct < 80 else ("#fbbf24" if b_pct < 100 else "#f87171")
-            b_lbl = QLabel(f"⏱ {b_pct}% of {budget_mins}m limit")
+            is_blocked = (b_pct is not None and b_pct >= 100 and app_data.get("block_on_exceed", False))
+            if is_blocked:
+                b_color = "#f43f5e"
+                badge_text = f"🚫 BLOCKED ({b_pct}%)"
+            else:
+                b_color = "#34d399" if b_pct is None or b_pct < 80 else ("#fbbf24" if b_pct < 100 else "#f87171")
+                badge_text = f"⏱ {b_pct}% of {budget_mins}m limit" if b_pct is not None else f"⏱ {budget_mins}m limit"
+            b_lbl = QLabel(badge_text)
             b_lbl.setStyleSheet(f"font-size: 9px; font-weight: 700; color: {b_color}; background-color: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 4px; font-family: monospace;")
             sub_row.addWidget(b_lbl)
 

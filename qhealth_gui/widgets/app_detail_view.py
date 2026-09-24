@@ -2,7 +2,7 @@ from typing import Dict, Any, Callable, List, Optional
 from datetime import datetime
 from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtWidgets import (
-    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QProgressBar, QToolTip, QSizePolicy, QScrollArea
+    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QProgressBar, QCheckBox, QToolTip, QSizePolicy, QScrollArea
 )
 from PyQt6.QtGui import QPainter, QColor, QFont, QBrush, QLinearGradient
 from qhealth_core.db import set_app_budget
@@ -373,6 +373,35 @@ class AppDetailView(QWidget):
         """)
         self.budget_progress_box.addWidget(self.budget_status_lbl)
         self.budget_progress_box.addWidget(self.budget_bar)
+
+        self.block_checkbox = QCheckBox("Force close application when daily limit is reached")
+        self.block_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.block_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #94a3b8;
+                font-size: 11px;
+                font-weight: 500;
+                spacing: 7px;
+                padding-top: 4px;
+            }
+            QCheckBox::indicator {
+                width: 14px;
+                height: 14px;
+                border-radius: 3px;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+                background: rgba(15, 23, 42, 0.6);
+            }
+            QCheckBox::indicator:checked {
+                background: #10b981;
+                border-color: #10b981;
+            }
+            QCheckBox:hover {
+                color: #e2e8f0;
+            }
+        """)
+        self.block_checkbox.toggled.connect(self._on_block_checkbox_toggled)
+        self.budget_progress_box.addWidget(self.block_checkbox)
+
         b_lay.addLayout(self.budget_progress_box)
 
         main_lay.addWidget(self.budget_card)
@@ -460,8 +489,16 @@ class AppDetailView(QWidget):
         limit_mins = self.budget_combo.currentData()
         if limit_mins is None:
             limit_mins = 0
-        set_app_budget(self.current_app_id, limit_mins, enabled=(limit_mins > 0))
+        block_on_exceed = self.block_checkbox.isChecked() if limit_mins > 0 else True
+        set_app_budget(self.current_app_id, limit_mins, enabled=(limit_mins > 0), block_on_exceed=block_on_exceed)
+        self.block_checkbox.setVisible(limit_mins > 0)
         self._update_budget_ui(self._last_duration, limit_mins, self._last_range_type)
+
+    def _on_block_checkbox_toggled(self, checked: bool):
+        if self._is_updating or not self.current_app_id:
+            return
+        limit_mins = self.budget_combo.currentData() or 0
+        set_app_budget(self.current_app_id, limit_mins, enabled=(limit_mins > 0), block_on_exceed=checked)
 
     def _update_budget_ui(self, dur: int, limit_mins: int, range_type: str = "day"):
         if limit_mins > 0:
@@ -530,12 +567,15 @@ class AppDetailView(QWidget):
         self._is_updating = True
         budget_info = data.get("budget") or {}
         limit_mins = budget_info.get("daily_limit_minutes", 0) if budget_info.get("enabled", 1) else 0
+        block_on_exceed = bool(budget_info.get("block_on_exceed", 1))
         
         idx = self.budget_combo.findData(limit_mins)
         if idx >= 0:
             self.budget_combo.setCurrentIndex(idx)
         else:
             self.budget_combo.setCurrentIndex(0)
+        self.block_checkbox.setChecked(block_on_exceed)
+        self.block_checkbox.setVisible(limit_mins > 0)
         self._is_updating = False
 
         self._update_budget_ui(dur, limit_mins, range_type)

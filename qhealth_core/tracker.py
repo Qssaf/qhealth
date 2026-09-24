@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from .db import record_activity_chunk, record_input_heatmap_chunk, init_db
 from .app_resolver import app_resolver
+from .blocker import force_close_app, send_block_notification
 
 EVENT_STRUCT_FMT = "qqHHi"
 EVENT_SIZE = struct.calcsize(EVENT_STRUCT_FMT)
@@ -40,7 +41,13 @@ class ActivityTracker:
         self.current_raw_app = ""
         self.current_title = ""
         self.current_class = ""
+        self.current_pid = 0
         self.resolved_app_info = app_resolver.resolve("")
+
+        # Blocked apps state
+        self.blocked_app_details = {}
+        self.blocked_app_ids = set()
+        self._blocked_lock = threading.Lock()
 
         # Last external app (to display in Live card when QHealth is open)
         self.last_external_app_info = app_resolver.resolve("")
@@ -97,6 +104,42 @@ class ActivityTracker:
     def toggle_pause(self) -> bool:
         self.paused = not self.paused
         return self.paused
+
+    def update_blocked_apps(self, blocked_dict: Dict[str, Dict[str, Any]]):
+        """Updates the internal set of blocked apps for real-time enforcement."""
+        with self._blocked_lock:
+            self.blocked_app_details = dict(blocked_dict)
+            self.blocked_app_ids = {
+                k.lower().strip() for k, v in blocked_dict.items()
+                if v.get("block_on_exceed", True)
+            }
+
+    def is_app_blocked(self, app_id: str, raw_app: str = "", raw_cls: str = "") -> Optional[Dict[str, Any]]:
+        """Returns budget info if the app is currently exceeded and blocked, else None."""
+        with self._blocked_lock:
+            if not self.blocked_app_ids:
+                return None
+
+            candidates = {
+                (app_id or "").lower().strip(),
+                (raw_app or "").lower().strip(),
+                (raw_cls or "").lower().strip()
+            }
+            # Also check stripped extensions
+            for c in list(candidates):
+                if c.endswith(".desktop"):
+                    candidates.add(c[:-8])
+
+            for cand in candidates:
+                if not cand:
+                    continue
+                if cand in self.blocked_app_ids:
+                    return self.blocked_app_details.get(cand)
+                # Check for prefix or suffix match (e.g. org.mozilla.firefox -> firefox)
+                for b_id in self.blocked_app_ids:
+                    if cand == b_id or cand.endswith(f".{b_id}") or b_id.endswith(f".{cand}"):
+                        return self.blocked_app_details.get(b_id)
+        return None
 
     def get_live_metrics(self) -> Dict[str, Any]:
         now = time.monotonic()
@@ -239,16 +282,19 @@ class ActivityTracker:
                 var app = win.desktopFileName || win.resourceClass || win.resourceName || "";
                 var title = win.caption || "";
                 var cls = win.resourceClass || win.resourceName || "";
+                var pid = win.pid || 0;
                 console.log("QHEALTH_FOCUS:" + JSON.stringify({
                     app: app,
                     title: title,
-                    cls: cls
+                    cls: cls,
+                    pid: pid
                 }));
             } else {
                 console.log("QHEALTH_FOCUS:" + JSON.stringify({
                     app: "",
                     title: "",
-                    cls: ""
+                    cls: "",
+                    pid: 0
                 }));
             }
         }
@@ -329,6 +375,7 @@ class ActivityTracker:
                             raw_app = data.get("app", "")
                             raw_title = data.get("title", "")
                             raw_cls = data.get("cls", "")
+                            pid = int(data.get("pid", 0) or 0)
                             
                             resolved = app_resolver.resolve(raw_app, raw_title, raw_cls)
                             is_qhealth = (
@@ -336,11 +383,29 @@ class ActivityTracker:
                                 "qhealth" in raw_cls.lower() or
                                 resolved.get("app_id") == "qhealth"
                             )
+
+                            # Check if the focused app is exceeded and blocked
+                            blocked_info = self.is_app_blocked(resolved.get("app_id", ""), raw_app, raw_cls)
+                            if blocked_info and not is_qhealth:
+                                target_id = resolved.get("app_id", raw_app)
+                                app_name = resolved.get("display_name", raw_app or "Application")
+                                limit_mins = blocked_info.get("daily_limit_minutes", 0)
+                                force_close_app(target_id, app_name, pid)
+                                send_block_notification(app_name, limit_mins, target_id, is_reopen=True)
+
+                                with self.window_lock:
+                                    self.current_raw_app = ""
+                                    self.current_title = ""
+                                    self.current_class = ""
+                                    self.current_pid = 0
+                                    self.resolved_app_info = app_resolver.resolve("")
+                                continue
                             
                             with self.window_lock:
                                 self.current_raw_app = raw_app
                                 self.current_title = raw_title
                                 self.current_class = raw_cls
+                                self.current_pid = pid
                                 self.resolved_app_info = resolved
                                 if not is_qhealth and resolved.get("is_active_window", False):
                                     self.last_external_app_info = resolved

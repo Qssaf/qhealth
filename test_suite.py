@@ -259,6 +259,62 @@ class TestDatabase(unittest.TestCase):
         db.toggle_pause_setting()
         self.assertFalse(db.is_paused_setting())
 
+    def test_budget_and_exceeded_blocking(self):
+        # 1. Set budget with block_on_exceed enabled
+        db.set_app_budget("steam", 30, enabled=True, block_on_exceed=True)
+        b_info = db.get_app_budget("steam")
+        self.assertIsNotNone(b_info)
+        self.assertEqual(b_info["daily_limit_minutes"], 30)
+        self.assertEqual(b_info["block_on_exceed"], 1)
+
+        # 2. Record 20 minutes (under 30m limit)
+        today = datetime.date.today().strftime("%Y-%m-%d")
+        db.record_activity_chunk(
+            app_id="steam",
+            app_name="Steam",
+            window_title="Steam Library",
+            duration_seconds=1200, # 20 mins
+            keystrokes=50,
+            clicks=10,
+            scrolls=5
+        )
+        exceeded = db.get_exceeded_app_budgets(today)
+        self.assertNotIn("steam", exceeded)
+
+        # 3. Record another 15 minutes (total 35m -> exceeds 30m limit)
+        db.record_activity_chunk(
+            app_id="steam",
+            app_name="Steam",
+            window_title="Counter-Strike 2",
+            duration_seconds=900, # 15 mins
+            keystrokes=200,
+            clicks=80,
+            scrolls=10
+        )
+        exceeded = db.get_exceeded_app_budgets(today)
+        self.assertIn("steam", exceeded)
+        self.assertEqual(exceeded["steam"]["daily_limit_minutes"], 30)
+        self.assertTrue(exceeded["steam"]["block_on_exceed"])
+        self.assertGreaterEqual(exceeded["steam"]["used_minutes"], 35.0)
+
+        # 4. Check get_stats_by_range includes block_on_exceed
+        stats = db.get_stats_by_range("day", target_date=today)
+        steam_app = next((a for a in stats["apps"] if a["app_id"] == "steam"), None)
+        self.assertIsNotNone(steam_app)
+        self.assertEqual(steam_app["budget_percentage"], 100.0)
+        self.assertTrue(steam_app["block_on_exceed"])
+
+        # 5. Disable blocking toggle
+        db.set_app_budget("steam", 30, enabled=True, block_on_exceed=False)
+        exceeded = db.get_exceeded_app_budgets(today)
+        self.assertIn("steam", exceeded)
+        self.assertFalse(exceeded["steam"]["block_on_exceed"])
+
+        # 6. Disable budget completely
+        db.set_app_budget("steam", 0, enabled=False)
+        exceeded = db.get_exceeded_app_budgets(today)
+        self.assertNotIn("steam", exceeded)
+
 class TestAppResolver(unittest.TestCase):
     def test_explicit_overrides(self):
         res = app_resolver.resolve("ai.opencode.desktop")
@@ -394,6 +450,80 @@ class TestGUIWidgets(unittest.TestCase):
         win._on_app_selected({"app_id": "vesktop", "app_name": "Vesktop"})
         win._on_back_to_apps_list()
         win.close()
+
+class TestBlocker(unittest.TestCase):
+    def test_immunity_checks(self):
+        from qhealth_core.blocker import is_immune, is_process_running
+
+        # Critical desktop and editor components must be immune
+        self.assertTrue(is_immune("qhealth"))
+        self.assertTrue(is_immune("opencode"))
+        self.assertTrue(is_immune("ai.opencode.desktop"))
+        self.assertTrue(is_immune("plasmashell"))
+        self.assertTrue(is_immune("kwin_wayland"))
+        self.assertTrue(is_immune("systemsettings"))
+        self.assertTrue(is_immune("desktop"))
+        self.assertTrue(is_immune("idle"))
+        self.assertTrue(is_immune("konsole"))
+
+        # Low PIDs and self PID must be immune
+        self.assertTrue(is_immune("", "", pid=1))
+        self.assertTrue(is_immune("", "", pid=os.getpid()))
+
+        # Non-immune user apps
+        self.assertFalse(is_immune("steam"))
+        self.assertFalse(is_immune("brave-browser"))
+        self.assertFalse(is_immune("vesktop"))
+        self.assertFalse(is_immune("spotify"))
+
+    def test_process_tree_safety(self):
+        from qhealth_core.blocker import get_process_tree
+        # Never traverse PID 1 or self
+        self.assertEqual(get_process_tree(1), [])
+        self.assertEqual(get_process_tree(os.getpid()), [])
+
+    def test_notification_throttling(self):
+        from qhealth_core.blocker import send_block_notification, _last_notification_time
+        _last_notification_time.clear()
+        t0 = datetime.datetime.now().timestamp()
+        send_block_notification("TestApp", 30, "test_app", is_reopen=True)
+        self.assertIn("test_app", _last_notification_time)
+        recorded_t = _last_notification_time["test_app"]
+        self.assertGreaterEqual(recorded_t, t0 - 1)
+
+        # Second call immediately should be throttled (timestamp unchanged)
+        send_block_notification("TestApp", 30, "test_app", is_reopen=True)
+        self.assertEqual(_last_notification_time["test_app"], recorded_t)
+
+class TestActivityTrackerBlocking(unittest.TestCase):
+    def test_tracker_blocking_cache_and_matching(self):
+        from qhealth_core.tracker import ActivityTracker
+        tracker = ActivityTracker()
+
+        # Initially unblocked
+        self.assertIsNone(tracker.is_app_blocked("steam"))
+
+        # Update blocked apps
+        tracker.update_blocked_apps({
+            "steam": {"daily_limit_minutes": 60, "block_on_exceed": True},
+            "brave-browser": {"daily_limit_minutes": 120, "block_on_exceed": True},
+            "unblocked_app": {"daily_limit_minutes": 30, "block_on_exceed": False},
+        })
+
+        # Check direct match
+        res_steam = tracker.is_app_blocked("steam")
+        self.assertIsNotNone(res_steam)
+        self.assertEqual(res_steam["daily_limit_minutes"], 60)
+
+        # Check reverse-DNS / suffix match
+        res_brave = tracker.is_app_blocked("brave", raw_cls="brave-browser")
+        self.assertIsNotNone(res_brave)
+
+        # Check app with block_on_exceed=False is not in blocked set
+        self.assertIsNone(tracker.is_app_blocked("unblocked_app"))
+
+        # Check unmonitored app
+        self.assertIsNone(tracker.is_app_blocked("vesktop"))
 
 if __name__ == "__main__":
     unittest.main()

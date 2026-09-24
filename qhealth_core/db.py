@@ -163,25 +163,33 @@ def init_db(force: bool = False):
         CREATE TABLE IF NOT EXISTS app_budgets (
             app_id TEXT PRIMARY KEY,
             daily_limit_minutes INTEGER NOT NULL DEFAULT 0,
-            enabled INTEGER NOT NULL DEFAULT 1
+            enabled INTEGER NOT NULL DEFAULT 1,
+            block_on_exceed INTEGER NOT NULL DEFAULT 1
         )
         """)
+
+        # Migration: ensure block_on_exceed column exists for pre-existing tables
+        try:
+            cursor.execute("ALTER TABLE app_budgets ADD COLUMN block_on_exceed INTEGER NOT NULL DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
         
         conn.commit()
         _db_initialized = True
 
-def set_app_budget(app_id: str, daily_limit_minutes: int, enabled: bool = True):
+def set_app_budget(app_id: str, daily_limit_minutes: int, enabled: bool = True, block_on_exceed: bool = True):
     init_db()
     cleaned_id = app_id.lower().strip()
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-        INSERT INTO app_budgets (app_id, daily_limit_minutes, enabled)
-        VALUES (?, ?, ?)
+        INSERT INTO app_budgets (app_id, daily_limit_minutes, enabled, block_on_exceed)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(app_id) DO UPDATE SET
             daily_limit_minutes = excluded.daily_limit_minutes,
-            enabled = excluded.enabled
-        """, (cleaned_id, daily_limit_minutes, 1 if enabled else 0))
+            enabled = excluded.enabled,
+            block_on_exceed = excluded.block_on_exceed
+        """, (cleaned_id, daily_limit_minutes, 1 if enabled else 0, 1 if block_on_exceed else 0))
         conn.commit()
 
 def get_app_budget(app_id: str) -> Optional[Dict[str, Any]]:
@@ -189,7 +197,7 @@ def get_app_budget(app_id: str) -> Optional[Dict[str, Any]]:
     cleaned_id = app_id.lower().strip()
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT app_id, daily_limit_minutes, enabled FROM app_budgets WHERE app_id = ?", (cleaned_id,))
+        cursor.execute("SELECT app_id, daily_limit_minutes, enabled, block_on_exceed FROM app_budgets WHERE app_id = ?", (cleaned_id,))
         row = cursor.fetchone()
         return dict(row) if row else None
 
@@ -197,8 +205,41 @@ def get_all_app_budgets() -> Dict[str, Dict[str, Any]]:
     init_db()
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT app_id, daily_limit_minutes, enabled FROM app_budgets")
+        cursor.execute("SELECT app_id, daily_limit_minutes, enabled, block_on_exceed FROM app_budgets")
         return {row["app_id"]: dict(row) for row in cursor.fetchall()}
+
+def get_exceeded_app_budgets(date_str: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """Returns apps that reached or exceeded their daily budget for date_str (defaults to today)."""
+    init_db()
+    if not date_str:
+        date_str = datetime.date.today().strftime("%Y-%m-%d")
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        SELECT 
+            LOWER(b.app_id) as app_id,
+            b.daily_limit_minutes,
+            b.block_on_exceed,
+            COALESCE(SUM(a.duration_seconds), 0) as used_seconds
+        FROM app_budgets b
+        LEFT JOIN activity_log a ON LOWER(a.app_id) = LOWER(b.app_id) AND a.date_str = ?
+        WHERE b.enabled = 1 AND b.daily_limit_minutes > 0
+        GROUP BY b.app_id
+        HAVING used_seconds >= (b.daily_limit_minutes * 60)
+        """, (date_str,))
+        exceeded = {}
+        for row in cursor.fetchall():
+            a_id = row["app_id"]
+            limit_mins = row["daily_limit_minutes"]
+            used_secs = row["used_seconds"]
+            exceeded[a_id] = {
+                "app_id": a_id,
+                "daily_limit_minutes": limit_mins,
+                "block_on_exceed": bool(row["block_on_exceed"]),
+                "used_seconds": used_secs,
+                "used_minutes": round(used_secs / 60.0, 1)
+            }
+        return exceeded
 
 def get_activity_streak_stats() -> Dict[str, Any]:
     init_db()
@@ -564,14 +605,17 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
                 if range_type == "all_time":
                     app["budget_minutes"] = limit_mins
                     app["budget_percentage"] = None
+                    app["block_on_exceed"] = bool(b_info.get("block_on_exceed", 1))
                 else:
                     total_limit_secs = limit_mins * 60 * range_days
                     app["budget_minutes"] = limit_mins * range_days if range_days > 1 else limit_mins
                     app["daily_limit_minutes"] = limit_mins
                     app["budget_percentage"] = min(100.0, round((app["duration"] / float(total_limit_secs)) * 100, 1))
+                    app["block_on_exceed"] = bool(b_info.get("block_on_exceed", 1))
             else:
                 app["budget_minutes"] = None
                 app["budget_percentage"] = None
+                app["block_on_exceed"] = False
 
         # 3. Category Breakdown
         cursor.execute(f"""
