@@ -277,7 +277,7 @@ def send_block_notification(app_name: str, limit_mins: int, app_id: str, is_reop
     _last_notification_time[app_id] = now
     title = "QHealth — App Blocked" if is_reopen else "QHealth — Daily Budget Exceeded"
     if is_reopen:
-        msg = f"{app_name} has reached its daily limit ({limit_mins}m) and cannot be opened today."
+        msg = f"{app_name} has reached its daily limit ({limit_mins}m) and cannot be opened today. You can add 15 minutes from QHealth."
     else:
         msg = f"{app_name} daily limit ({limit_mins}m) reached. Force closing application."
 

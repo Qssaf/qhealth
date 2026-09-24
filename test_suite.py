@@ -415,6 +415,31 @@ class TestGUIWidgets(unittest.TestCase):
         self.GlowingDatePickerBtn = GlowingDatePickerBtn
         self.QHealthMainWindow = QHealthMainWindow
 
+    def test_budget_extension_button(self):
+        today = datetime.date.today().strftime("%Y-%m-%d")
+        db.set_app_budget("steam", 30)
+        self.addCleanup(db.set_app_budget, "steam", 0, False)
+        view = self.AppDetailView(on_back=lambda: None)
+        data = {"app_id": "steam", "display_name": "Steam", "total_duration": 1800, "target_date": today,
+                "budget": {"daily_limit_minutes": 30, "enabled": 1, "block_on_exceed": 1},
+                "budget_extra_minutes": 0, "timeline": [], "pages_breakdown": []}
+        view.set_app_data(data, "day")
+        self.assertFalse(view.extend_btn.isHidden())
+        before = db.get_budget_extensions(today).get("steam", 0)
+        view.extend_btn.click()
+        self.assertEqual(db.get_budget_extensions(today)["steam"], before + 15)
+        self.assertTrue(view.extend_btn.isHidden())  # 30m used of 45m
+        self.assertIn("+15m extension", view.budget_status_lbl.text())
+
+        # Past days, other ranges and custom limits
+        view.set_app_data(dict(data, target_date="2020-01-01"), "day")
+        self.assertTrue(view.extend_btn.isHidden())
+        self.assertIn("on 2020-01-01", view.budget_status_lbl.text())
+        view.set_app_data(dict(data, budget={"daily_limit_minutes": 45, "enabled": 1, "block_on_exceed": 1}), "week")
+        self.assertEqual(view.budget_combo.currentData(), 45)
+        view.set_app_data(data, "all_time")
+        self.assertIn("Daily limit", view.budget_status_lbl.text())
+
     def test_widget_rendering_edge_cases(self):
         # 1. Radial chart with 0 seconds and with apps
         radial = self.RadialChartWidget()
