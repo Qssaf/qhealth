@@ -256,6 +256,16 @@ def init_db(force: bool = False):
         )
         """)
 
+        # Per-day "+N minutes" granted on top of an app's daily limit
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS budget_extensions (
+            date_str TEXT NOT NULL,
+            app_id TEXT NOT NULL,
+            extra_minutes INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (date_str, app_id)
+        )
+        """)
+
         # Migration: ensure block_on_exceed column exists for pre-existing tables
         try:
             cursor.execute("ALTER TABLE app_budgets ADD COLUMN block_on_exceed INTEGER NOT NULL DEFAULT 1")
@@ -296,38 +306,65 @@ def get_all_app_budgets() -> Dict[str, Dict[str, Any]]:
         cursor.execute("SELECT app_id, daily_limit_minutes, enabled, block_on_exceed FROM app_budgets")
         return {row["app_id"]: dict(row) for row in cursor.fetchall()}
 
-def get_exceeded_app_budgets(date_str: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
-    """Returns apps that reached or exceeded their daily budget for date_str (defaults to today)."""
+def extend_app_budget(app_id: str, minutes: int, date_str: Optional[str] = None):
+    """Grants extra minutes on top of an app's daily limit for one day (defaults to today)."""
     init_db()
     if not date_str:
         date_str = datetime.date.today().strftime("%Y-%m-%d")
     with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-        SELECT 
-            LOWER(b.app_id) as app_id,
+        conn.execute("""
+        INSERT INTO budget_extensions (date_str, app_id, extra_minutes) VALUES (?, ?, ?)
+        ON CONFLICT(date_str, app_id) DO UPDATE SET extra_minutes = extra_minutes + excluded.extra_minutes
+        """, (date_str, app_id.lower().strip(), int(minutes)))
+        conn.commit()
+
+def get_budget_extensions(date_str: Optional[str] = None) -> Dict[str, int]:
+    init_db()
+    if not date_str:
+        date_str = datetime.date.today().strftime("%Y-%m-%d")
+    with get_db() as conn:
+        rows = conn.execute("SELECT app_id, extra_minutes FROM budget_extensions WHERE date_str = ?", (date_str,)).fetchall()
+    return {r["app_id"]: r["extra_minutes"] for r in rows}
+
+def get_budget_usage(date_str: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """Every enabled budget with its usage and effective limit (limit + extensions) for date_str."""
+    init_db()
+    if not date_str:
+        date_str = datetime.date.today().strftime("%Y-%m-%d")
+    with get_db() as conn:
+        rows = conn.execute("""
+        SELECT
+            LOWER(b.app_id) AS app_id,
             b.daily_limit_minutes,
             b.block_on_exceed,
-            COALESCE(SUM(a.duration_seconds), 0) as used_seconds
+            COALESCE(e.extra_minutes, 0) AS extra_minutes,
+            COALESCE((
+                SELECT SUM(a.duration_seconds) FROM daily_app_totals a
+                WHERE a.date_str = ? AND LOWER(a.app_id) = LOWER(b.app_id)
+            ), 0) AS used_seconds
         FROM app_budgets b
-        LEFT JOIN activity_log a ON LOWER(a.app_id) = LOWER(b.app_id) AND a.date_str = ?
+        LEFT JOIN budget_extensions e ON e.app_id = LOWER(b.app_id) AND e.date_str = ?
         WHERE b.enabled = 1 AND b.daily_limit_minutes > 0
-        GROUP BY b.app_id
-        HAVING used_seconds >= (b.daily_limit_minutes * 60)
-        """, (date_str,))
-        exceeded = {}
-        for row in cursor.fetchall():
-            a_id = row["app_id"]
-            limit_mins = row["daily_limit_minutes"]
-            used_secs = row["used_seconds"]
-            exceeded[a_id] = {
-                "app_id": a_id,
-                "daily_limit_minutes": limit_mins,
-                "block_on_exceed": bool(row["block_on_exceed"]),
-                "used_seconds": used_secs,
-                "used_minutes": round(used_secs / 60.0, 1)
-            }
-        return exceeded
+        """, (date_str, date_str)).fetchall()
+    usage = {}
+    for r in rows:
+        usage[r["app_id"]] = {
+            "app_id": r["app_id"],
+            "daily_limit_minutes": r["daily_limit_minutes"],
+            "extra_minutes": r["extra_minutes"],
+            "effective_limit_minutes": r["daily_limit_minutes"] + r["extra_minutes"],
+            "block_on_exceed": bool(r["block_on_exceed"]),
+            "used_seconds": r["used_seconds"],
+            "used_minutes": round(r["used_seconds"] / 60.0, 1),
+        }
+    return usage
+
+def get_exceeded_app_budgets(date_str: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+    """Returns apps that reached or exceeded their daily budget (plus any extension) for date_str (defaults to today)."""
+    return {
+        a_id: info for a_id, info in get_budget_usage(date_str).items()
+        if info["used_seconds"] >= info["effective_limit_minutes"] * 60
+    }
 
 def get_activity_streak_stats() -> Dict[str, Any]:
     init_db()
@@ -683,6 +720,7 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
         total_duration = totals["duration"]
         apps = sorted(app_map.values(), key=lambda a: a["duration"], reverse=True)
         budgets = get_all_app_budgets()
+        extensions = get_budget_extensions(target_date) if range_type == "day" else {}
 
         for app in apps:
             a_id = app.get("app_id", "").lower()
@@ -694,7 +732,7 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
 
             b_info = budgets.get(a_id)
             if b_info and b_info.get("enabled", 1) and b_info.get("daily_limit_minutes", 0) > 0:
-                limit_mins = b_info["daily_limit_minutes"]
+                limit_mins = b_info["daily_limit_minutes"] + extensions.get(a_id, 0)
                 range_days = 1
                 if range_type == "week":
                     range_days = 7
@@ -1292,6 +1330,7 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
     summary["range_type"] = range_type
     summary["target_date"] = target_date
     summary["budget"] = get_app_budget(app_id)
+    summary["budget_extra_minutes"] = get_budget_extensions(target_date).get(app_id.lower(), 0)
 
     return summary
 

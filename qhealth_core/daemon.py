@@ -3,17 +3,10 @@ import json
 import time
 import signal
 import sys
-import datetime
-import subprocess
 from pathlib import Path
-from typing import Optional
 from .tracker import ActivityTracker
-from .db import (
-    init_db, is_paused_setting, get_stats_by_range,
-    get_all_app_budgets, get_exceeded_app_budgets, vacuum_and_cleanup_db
-)
-from .blocker import force_close_app, send_block_notification
-from .app_resolver import app_resolver
+from .db import init_db, is_paused_setting, get_stats_by_range, vacuum_and_cleanup_db
+from .wellbeing import BudgetEnforcer
 
 STATE_DIR = Path.home() / ".local" / "share" / "qhealth"
 STATE_FILE = STATE_DIR / "live_state.json"
@@ -22,10 +15,10 @@ PID_FILE = STATE_DIR / "daemon.pid"
 class QHealthDaemon:
     def __init__(self):
         self.running = False
-        self.notified_budget_alerts = set()
         self._lock_file = None
         init_db()
         self.tracker = ActivityTracker()
+        self.budget_enforcer = BudgetEnforcer(self.tracker)
 
     def start(self):
         STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -64,9 +57,7 @@ class QHealthDaemon:
                     try:
                         today_stats = get_stats_by_range("day")
                         today_dur = today_stats.get("total_duration", 0)
-                        exceeded = get_exceeded_app_budgets()
-                        self.tracker.update_blocked_apps(exceeded)
-                        self._check_budget_limits(today_stats, exceeded)
+                        self.budget_enforcer.check()
                     except Exception:
                         pass
 
@@ -102,82 +93,6 @@ class QHealthDaemon:
                 time.sleep(1.0)
         finally:
             self.stop()
-
-    def _check_budget_limits(self, stats: dict, exceeded: Optional[dict] = None):
-        today_str = datetime.date.today().strftime("%Y-%m-%d")
-        if self.notified_budget_alerts:
-            self.notified_budget_alerts = {k for k in self.notified_budget_alerts if k.startswith(today_str)}
-        budgets = get_all_app_budgets()
-        if exceeded is None:
-            exceeded = get_exceeded_app_budgets()
-
-        for app in stats.get("apps", []):
-            a_id = app.get("app_id", "").lower()
-            b_info = budgets.get(a_id)
-            if not b_info or not b_info.get("enabled", 1) or b_info.get("daily_limit_minutes", 0) <= 0:
-                continue
-            limit_mins = b_info["daily_limit_minutes"]
-            dur_secs = app.get("duration", 0)
-            dur_mins = dur_secs / 60.0
-            app_name = app.get("app_name", a_id)
-
-            # 80% Threshold
-            if dur_mins >= limit_mins * 0.8 and f"{today_str}_{a_id}_80" not in self.notified_budget_alerts:
-                self.notified_budget_alerts.add(f"{today_str}_{a_id}_80")
-                self._send_notification(
-                    f"QHealth — 80% Limit Warning",
-                    f"You have used {app_name} for {int(dur_mins)}m (Daily budget: {limit_mins}m)."
-                )
-
-            # 100% Threshold
-            if dur_mins >= limit_mins and f"{today_str}_{a_id}_100" not in self.notified_budget_alerts:
-                self.notified_budget_alerts.add(f"{today_str}_{a_id}_100")
-                block_on_exceed = bool(b_info.get("block_on_exceed", 1))
-                if block_on_exceed:
-                    send_block_notification(app_name, limit_mins, a_id, is_reopen=False)
-                else:
-                    self._send_notification(
-                        f"QHealth — Daily Budget Exceeded",
-                        f"{app_name} limit reached ({int(dur_mins)}m / {limit_mins}m)!"
-                    )
-
-            # Enforcement: kill the app when it first exceeds, or whenever it is focused again.
-            # Re-opens are caught instantly by the tracker's focus hook, so there is no need
-            # to rescan /proc for every exceeded app on every loop.
-            if a_id in exceeded and b_info.get("block_on_exceed", 1):
-                cur_pid = None
-                is_focused = False
-                with self.tracker.window_lock:
-                    cur_app_id = self.tracker.resolved_app_info.get("app_id", "").lower()
-                    cur_raw = self.tracker.current_raw_app.lower()
-                    if cur_app_id == a_id or (cur_raw and (
-                        cur_raw == a_id or a_id.endswith(f".{cur_raw}") or cur_raw.endswith(f".{a_id}")
-                    )):
-                        is_focused = True
-                        cur_pid = self.tracker.current_pid or None
-                        self.tracker.current_raw_app = ""
-                        self.tracker.current_title = ""
-                        self.tracker.current_class = ""
-                        self.tracker.current_pid = 0
-                        self.tracker.resolved_app_info = app_resolver.resolve("")
-                kill_key = f"{today_str}_{a_id}_kill"
-                if is_focused or kill_key not in self.notified_budget_alerts:
-                    self.notified_budget_alerts.add(kill_key)
-                    force_close_app(a_id, app_name, cur_pid)
-
-    def _send_notification(self, title: str, message: str):
-        try:
-            icon_path = str(Path.home() / ".local" / "share" / "icons" / "qhealth.svg")
-            subprocess.run([
-                "notify-send",
-                "-a", "QHealth",
-                "-i", icon_path if os.path.exists(icon_path) else "qhealth",
-                "-u", "normal",
-                title,
-                message
-            ], timeout=3)
-        except Exception:
-            pass
 
     def _handle_signal(self, signum, frame):
         self.running = False

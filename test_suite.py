@@ -317,6 +317,17 @@ class TestDatabase(unittest.TestCase):
         self.assertIn("steam", exceeded)
         self.assertFalse(exceeded["steam"]["block_on_exceed"])
 
+        # 5b. A one-day extension lifts the block until the new limit
+        db.extend_app_budget("steam", 15, today)
+        self.assertNotIn("steam", db.get_exceeded_app_budgets(today))
+        usage = db.get_budget_usage(today)["steam"]
+        self.assertEqual((usage["extra_minutes"], usage["effective_limit_minutes"]), (15, 45))
+        stats = db.get_stats_by_range("day", target_date=today)
+        steam_app = next(a for a in stats["apps"] if a["app_id"] == "steam")
+        self.assertLess(steam_app["budget_percentage"], 100.0)
+        tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        self.assertEqual(db.get_budget_extensions(tomorrow), {})
+
         # 6. Disable budget completely
         db.set_app_budget("steam", 0, enabled=False)
         exceeded = db.get_exceeded_app_budgets(today)
@@ -530,57 +541,95 @@ class TestBlocker(unittest.TestCase):
         self.assertFalse(_process_matches("code", ["code"], "python3", "/usr/bin/python3"))
         self.assertFalse(_process_matches("zed", [], "gzip", "/usr/bin/gzip"))
 
-class TestDaemonBudgetEnforcement(unittest.TestCase):
-    def _make_daemon(self, raw_app="", app_id="desktop", pid=0):
-        from qhealth_core.daemon import QHealthDaemon
+class TestBudgetEnforcer(unittest.TestCase):
+    def setUp(self):
+        from qhealth_core.wellbeing import BudgetEnforcer
+        patches = {
+            "close": unittest.mock.patch("qhealth_core.wellbeing.force_close_app"),
+            "block_note": unittest.mock.patch("qhealth_core.wellbeing.send_block_notification"),
+            "note": unittest.mock.patch("qhealth_core.wellbeing.send_notification"),
+        }
+        self.mocks = {k: p.start() for k, p in patches.items()}
+        for p in patches.values():
+            self.addCleanup(p.stop)
+        self.enforcer = BudgetEnforcer(self._make_tracker())
+
+    def _make_tracker(self, raw_app="", app_id="desktop", pid=0):
+        import threading
         from qhealth_core.tracker import ActivityTracker
-        d = QHealthDaemon.__new__(QHealthDaemon)
-        d.notified_budget_alerts = set()
-        d.tracker = ActivityTracker.__new__(ActivityTracker)
-        d.tracker.window_lock = __import__("threading").Lock()
-        d.tracker.current_raw_app = raw_app
-        d.tracker.current_title = "title"
-        d.tracker.current_class = raw_app
-        d.tracker.current_pid = pid
-        d.tracker.resolved_app_info = {"app_id": app_id}
-        return d
+        t = ActivityTracker.__new__(ActivityTracker)
+        t.window_lock = threading.Lock()
+        t._blocked_lock = threading.Lock()
+        t.blocked_app_details, t.blocked_app_ids = {}, set()
+        t.current_raw_app = raw_app
+        t.current_title = "title"
+        t.current_class = raw_app
+        t.current_pid = pid
+        t.resolved_app_info = {"app_id": app_id}
+        return t
 
-    def _run(self, d, mock_close):
-        budgets = {"steam": {"app_id": "steam", "daily_limit_minutes": 1, "enabled": 1, "block_on_exceed": 1}}
-        exceeded = {"steam": {"app_id": "steam", "daily_limit_minutes": 1, "block_on_exceed": True}}
-        stats = {"apps": [{"app_id": "steam", "app_name": "Steam", "duration": 120}]}
-        with unittest.mock.patch("qhealth_core.daemon.get_all_app_budgets", return_value=budgets), \
-             unittest.mock.patch("qhealth_core.daemon.send_block_notification"), \
-             unittest.mock.patch.object(d, "_send_notification"):
-            d._check_budget_limits(stats, exceeded)
+    @staticmethod
+    def _usage(used_seconds, limit=10, extra=0, block=True):
+        return {"steam": {
+            "app_id": "steam", "daily_limit_minutes": limit, "extra_minutes": extra,
+            "effective_limit_minutes": limit + extra, "block_on_exceed": block,
+            "used_seconds": used_seconds, "used_minutes": used_seconds / 60.0,
+        }}
 
-    @unittest.mock.patch("qhealth_core.daemon.force_close_app")
-    def test_unfocused_exceeded_app_killed_once_and_idle_state_untouched(self, mock_close):
+    def test_unfocused_exceeded_app_killed_once_and_idle_state_untouched(self):
         # Nothing focused (empty raw app) must not be treated as a match for every app
-        d = self._make_daemon(raw_app="", app_id="desktop")
-        self._run(d, mock_close)
-        mock_close.assert_called_once_with("steam", "Steam", None)
-        self.assertEqual(d.tracker.current_title, "title")
-        # Later loops must not rescan /proc while the app stays unfocused
-        self._run(d, mock_close)
-        self.assertEqual(mock_close.call_count, 1)
+        self.enforcer.check(self._usage(700))
+        self.mocks["close"].assert_called_once_with("steam", "Steam", None)
+        self.assertEqual(self.enforcer.tracker.current_title, "title")
+        self.assertIn("steam", self.enforcer.tracker.blocked_app_ids)
+        # Later checks must not rescan /proc while the app stays unfocused
+        self.enforcer.check(self._usage(705))
+        self.assertEqual(self.mocks["close"].call_count, 1)
 
-    @unittest.mock.patch("qhealth_core.daemon.force_close_app")
-    def test_focused_exceeded_app_killed_with_pid(self, mock_close):
-        d = self._make_daemon(raw_app="steam", app_id="steam", pid=4242)
-        self._run(d, mock_close)
-        self._run(d, mock_close)  # already focused-and-killed state was reset
-        mock_close.assert_called_once_with("steam", "Steam", 4242)
-        self.assertEqual(d.tracker.current_raw_app, "")
-        self.assertEqual(d.tracker.current_pid, 0)
-        self.assertEqual(d.tracker.resolved_app_info.get("app_id"), "desktop")
+    def test_focused_exceeded_app_killed_with_pid(self):
+        self.enforcer.tracker = self._make_tracker(raw_app="steam", app_id="steam", pid=4242)
+        self.enforcer.check(self._usage(700))
+        self.enforcer.check(self._usage(700))  # focus state was reset by the first kill
+        self.mocks["close"].assert_called_once_with("steam", "Steam", 4242)
+        t = self.enforcer.tracker
+        self.assertEqual((t.current_raw_app, t.current_pid), ("", 0))
+        self.assertEqual(t.resolved_app_info.get("app_id"), "desktop")
 
-    @unittest.mock.patch("qhealth_core.daemon.force_close_app")
-    def test_unrelated_focused_app_not_matched(self, mock_close):
-        d = self._make_daemon(raw_app="org.kde.konsole", app_id="org.kde.konsole", pid=777)
-        self._run(d, mock_close)
-        mock_close.assert_called_once_with("steam", "Steam", None)
-        self.assertEqual(d.tracker.current_pid, 777)
+    def test_unrelated_focused_app_not_matched(self):
+        self.enforcer.tracker = self._make_tracker(raw_app="org.kde.konsole", app_id="org.kde.konsole", pid=777)
+        self.enforcer.check(self._usage(700))
+        self.mocks["close"].assert_called_once_with("steam", "Steam", None)
+        self.assertEqual(self.enforcer.tracker.current_pid, 777)
+
+    def test_alert_levels_fire_once_in_order(self):
+        titles = lambda: [c.args[0] for c in self.mocks["note"].call_args_list]
+        self.enforcer.check(self._usage(300))   # 50%: nothing
+        self.assertEqual(titles(), [])
+        self.enforcer.check(self._usage(500))   # 83%
+        self.enforcer.check(self._usage(510))
+        self.assertEqual(titles(), ["QHealth — 80% Limit Warning"])
+        self.enforcer.check(self._usage(545))   # 55s left
+        self.assertEqual(titles()[-1], "QHealth — 1 Minute Left")
+        self.enforcer.check(self._usage(600))   # limit reached
+        self.mocks["block_note"].assert_called_once()
+        self.assertEqual(len(titles()), 2)
+
+    def test_jump_past_all_thresholds_sends_one_alert(self):
+        self.enforcer.check(self._usage(900, block=False))
+        self.assertEqual([c.args[0] for c in self.mocks["note"].call_args_list], ["QHealth — Daily Budget Exceeded"])
+        self.mocks["close"].assert_not_called()  # block_on_exceed off
+        self.assertNotIn("steam", self.enforcer.tracker.blocked_app_ids)
+
+    def test_extension_unblocks_and_rearms_warnings(self):
+        self.enforcer.check(self._usage(600))
+        self.assertIn("steam", self.enforcer.tracker.blocked_app_ids)
+        exceeded = self.enforcer.check(self._usage(610, extra=15))  # +15 min granted
+        self.assertEqual(exceeded, {})
+        self.assertNotIn("steam", self.enforcer.tracker.blocked_app_ids)
+        self.enforcer.check(self._usage(25 * 60 - 30, extra=15))  # 30s left of the new limit
+        self.assertEqual(self.mocks["note"].call_args_list[-1].args[0], "QHealth — 1 Minute Left")
+        self.enforcer.check(self._usage(25 * 60, extra=15))
+        self.assertEqual(self.mocks["close"].call_count, 2)  # killed again at the new limit
 
 class TestKWinScriptRecovery(unittest.TestCase):
     def _run(self, returncode, stdout):

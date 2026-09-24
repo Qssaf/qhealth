@@ -45,9 +45,11 @@ class QHealthApp:
 
         self.daemon_active = is_daemon_running()
         if not self.daemon_active:
-            from .db import get_exceeded_app_budgets
+            from .wellbeing import BudgetEnforcer
             self.tracker = ActivityTracker()
-            self.tracker.update_blocked_apps(get_exceeded_app_budgets())
+            # Same budget warnings and enforcement the daemon would provide
+            self.budget_enforcer = BudgetEnforcer(self.tracker)
+            self._run_budget_check()
             self.tracker.start()
             self._block_sync_timer = QTimer()
             self._block_sync_timer.timeout.connect(self._sync_standalone_tracker)
@@ -62,7 +64,6 @@ class QHealthApp:
         self._setup_tray()
 
     def _sync_standalone_tracker(self):
-        from .db import get_exceeded_app_budgets
         if is_daemon_running():
             # Daemon started after the GUI: hand tracking over to avoid double-counting
             self._block_sync_timer.stop()
@@ -70,7 +71,14 @@ class QHealthApp:
             self.tracker = None
             self.window.tracker = None
             return
-        self.tracker.update_blocked_apps(get_exceeded_app_budgets())
+        self._run_budget_check()
+
+    def _run_budget_check(self):
+        # PyQt aborts the whole app on an exception escaping a slot; a busy DB must not do that
+        try:
+            self.budget_enforcer.check()
+        except Exception:
+            pass
 
     def _check_single_instance(self) -> bool:
         socket = QLocalSocket()
