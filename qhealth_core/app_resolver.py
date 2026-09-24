@@ -177,7 +177,8 @@ class AppInfoResolver:
         cleaned_parts = [p for p in re.split(r"[\.\-_/\s]+", f"{cleaned_id} {cleaned_cls}") if p]
         for key, info in self._apps_cache.items():
             key_last = key.split(".")[-1]
-            if key_last and key_last not in {"desktop", "client", "app", "linux"}:
+            # Generic last segments (e.g. io.elementary.terminal) would hijack unrelated apps
+            if key_last and key_last not in {"desktop", "client", "app", "linux", "browser", "terminal", "editor", "player", "viewer"}:
                 if key_last in cleaned_parts or key.endswith(f".{cleaned_id}") or (cleaned_cls and key.endswith(f".{cleaned_cls}")):
                     res = {
                         "app_id": key,

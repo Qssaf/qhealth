@@ -345,6 +345,19 @@ class TestAppResolver(unittest.TestCase):
         res_open = app_resolver.resolve("opencode")
         self.assertEqual(res_open["display_name"], "OpenCode")
 
+    def test_generic_desktop_suffix_does_not_hijack(self):
+        app_resolver._apps_cache["io.elementary.terminal"] = {
+            "display_name": "Elementary Terminal", "icon": "utilities-terminal",
+            "category": "Development", "desktop_id": "io.elementary.terminal"
+        }
+        app_resolver.clear_cache()
+        try:
+            res = app_resolver.resolve("xfce4-terminal")
+            self.assertEqual(res["app_id"], "xfce4-terminal")
+        finally:
+            del app_resolver._apps_cache["io.elementary.terminal"]
+            app_resolver.clear_cache()
+
     def test_reverse_dns_and_suffix_resolution(self):
         app_resolver._apps_cache["org.pulseaudio.pavucontrol"] = {
             "display_name": "Volume Control",
@@ -568,6 +581,21 @@ class TestDaemonBudgetEnforcement(unittest.TestCase):
         self._run(d, mock_close)
         mock_close.assert_called_once_with("steam", "Steam", None)
         self.assertEqual(d.tracker.current_pid, 777)
+
+class TestKWinScriptRecovery(unittest.TestCase):
+    def _run(self, returncode, stdout):
+        from qhealth_core.tracker import ActivityTracker
+        tracker = ActivityTracker.__new__(ActivityTracker)
+        result = unittest.mock.Mock(returncode=returncode, stdout=stdout)
+        with unittest.mock.patch("qhealth_core.tracker.subprocess.run", return_value=result), \
+             unittest.mock.patch.object(ActivityTracker, "_inject_kwin_script") as inject:
+            tracker._ensure_kwin_script()
+        return inject.called
+
+    def test_reinjects_only_when_kwin_reports_not_loaded(self):
+        self.assertTrue(self._run(0, "b false\n"))    # KWin restarted, script gone
+        self.assertFalse(self._run(0, "b true\n"))    # still loaded
+        self.assertFalse(self._run(1, ""))            # no KWin on the bus (other WM)
 
 class TestDailyRollup(unittest.TestCase):
     def setUp(self):

@@ -23,6 +23,11 @@ REL_WHEEL = 8
 REL_HWHEEL = 6
 
 IDLE_THRESHOLD_SECONDS = 60
+KWIN_CHECK_INTERVAL_TICKS = 12  # aggregator ticks (5s each) between KWin script health checks
+
+# Kept in the user's private data dir, not world-writable /tmp, so another local
+# user cannot swap its contents before KWin loads it.
+KWIN_SCRIPT_PATH = Path.home() / ".local" / "share" / "qhealth" / "kwin_focus.js"
 
 MOUSE_BUTTON_MAP = {
     272: "left",
@@ -319,12 +324,9 @@ class ActivityTracker:
         }
         hookActive();
         """
-        # Keep the script in the user's private data dir, not world-writable /tmp,
-        # so another local user cannot swap its contents before KWin loads it.
-        script_dir = Path.home() / ".local" / "share" / "qhealth"
-        script_path = str(script_dir / "kwin_focus.js")
+        script_path = str(KWIN_SCRIPT_PATH)
         try:
-            script_dir.mkdir(parents=True, exist_ok=True)
+            KWIN_SCRIPT_PATH.parent.mkdir(parents=True, exist_ok=True)
             with open(script_path, "w") as f:
                 f.write(kwin_script)
             
@@ -350,6 +352,19 @@ class ActivityTracker:
         except Exception:
             pass
         return False
+
+    def _ensure_kwin_script(self):
+        """Re-injects the focus script if KWin restarted, since a restart drops loaded scripts."""
+        try:
+            res = subprocess.run([
+                "busctl", "--user", "call", "org.kde.KWin", "/Scripting",
+                "org.kde.kwin.Scripting", "isScriptLoaded", "s", str(KWIN_SCRIPT_PATH)
+            ], capture_output=True, text=True, timeout=3)
+        except Exception:
+            return
+        # Only act on a definite "not loaded" answer; no KWin on the bus means nothing to fix
+        if res.returncode == 0 and res.stdout.strip() == "b false":
+            self._inject_kwin_script()
 
     def _kwin_loop(self):
         """Integrates with KDE Plasma 6 KWin via Scripting and journalctl with auto-boot retry."""
@@ -483,8 +498,12 @@ class ActivityTracker:
             pass
 
     def _aggregator_loop(self):
+        ticks = 0
         while self.running:
             time.sleep(5.0)
+            ticks += 1
+            if ticks % KWIN_CHECK_INTERVAL_TICKS == 0:
+                self._ensure_kwin_script()
             if not self.paused:
                 self._flush_chunk()
             else:

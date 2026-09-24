@@ -1290,6 +1290,7 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
     summary["recent_titles"] = recent_titles
     summary["pages_breakdown"] = pages_breakdown
     summary["range_type"] = range_type
+    summary["target_date"] = target_date
     summary["budget"] = get_app_budget(app_id)
 
     return summary

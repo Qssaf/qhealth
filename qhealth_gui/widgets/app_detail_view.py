@@ -232,6 +232,7 @@ class AppDetailView(QWidget):
         self.current_app_id = ""
         self._last_duration = 0
         self._last_range_type = "day"
+        self._last_target_date = ""
         self._is_updating = False
 
         root_lay = QVBoxLayout(self)
@@ -501,7 +502,11 @@ class AppDetailView(QWidget):
         set_app_budget(self.current_app_id, limit_mins, enabled=(limit_mins > 0), block_on_exceed=checked)
 
     def _update_budget_ui(self, dur: int, limit_mins: int, range_type: str = "day"):
-        if limit_mins > 0:
+        if limit_mins > 0 and range_type == "all_time":
+            # A lifetime total can't be compared against a per-day limit
+            self.budget_bar.setValue(0)
+            self.budget_status_lbl.setText(f"Daily limit: {format_duration(limit_mins * 60)} (see Day view for usage)")
+        elif limit_mins > 0:
             range_days = 1
             if range_type == "week":
                 range_days = 7
@@ -526,7 +531,12 @@ class AppDetailView(QWidget):
                     border-radius: 3px;
                 }}
             """)
-            label_suffix = "today" if range_type == "day" else f"in {range_type.replace('_', ' ')}"
+            if range_type != "day":
+                label_suffix = f"in {range_type.replace('_', ' ')}"
+            elif self._last_target_date and self._last_target_date != datetime.now().strftime("%Y-%m-%d"):
+                label_suffix = f"on {self._last_target_date}"
+            else:
+                label_suffix = "today"
             self.budget_status_lbl.setText(f"Usage {label_suffix}: {format_duration(dur)} / {format_duration(limit_secs)} ({pct}%)")
         else:
             self.budget_bar.setValue(0)
@@ -546,6 +556,7 @@ class AppDetailView(QWidget):
 
         self.current_app_id = app_id
         self._last_range_type = range_type
+        self._last_target_date = data.get("target_date", "")
 
         self.name_lbl.setText(app_name)
         self.id_lbl.setText(f"({app_id})")
@@ -570,10 +581,11 @@ class AppDetailView(QWidget):
         block_on_exceed = bool(budget_info.get("block_on_exceed", 1))
         
         idx = self.budget_combo.findData(limit_mins)
-        if idx >= 0:
-            self.budget_combo.setCurrentIndex(idx)
-        else:
-            self.budget_combo.setCurrentIndex(0)
+        if idx < 0 and limit_mins > 0:
+            # Limit outside the presets (older version or manual DB edit): show it, not "No Limit"
+            self.budget_combo.addItem(f"{limit_mins} Minutes / Day", limit_mins)
+            idx = self.budget_combo.findData(limit_mins)
+        self.budget_combo.setCurrentIndex(max(idx, 0))
         self.block_checkbox.setChecked(block_on_exceed)
         self.block_checkbox.setVisible(limit_mins > 0)
         self._is_updating = False
