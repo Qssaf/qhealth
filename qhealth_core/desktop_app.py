@@ -1,4 +1,3 @@
-import os
 import sys
 import json
 from pathlib import Path
@@ -19,14 +18,15 @@ STATE_FILE = Path.home() / ".local" / "share" / "qhealth" / "live_state.json"
 PID_FILE = Path.home() / ".local" / "share" / "qhealth" / "daemon.pid"
 
 def is_daemon_running() -> bool:
-    if PID_FILE.exists():
-        try:
-            pid = int(PID_FILE.read_text().strip())
-            os.kill(pid, 0)
-            return True
-        except (ValueError, ProcessLookupError, PermissionError):
-            pass
-    return False
+    # A stale PID file (daemon killed with SIGKILL) may point at a recycled PID,
+    # so also confirm that process really is a QHealth daemon.
+    try:
+        pid = int(PID_FILE.read_text().strip())
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            args = f.read().decode("utf-8", errors="ignore").split("\x00")
+        return "--daemon" in args or "-d" in args
+    except (OSError, ValueError):
+        return False
 
 class QHealthApp:
     def __init__(self):
@@ -50,7 +50,7 @@ class QHealthApp:
             self.tracker.update_blocked_apps(get_exceeded_app_budgets())
             self.tracker.start()
             self._block_sync_timer = QTimer()
-            self._block_sync_timer.timeout.connect(lambda: self.tracker.update_blocked_apps(get_exceeded_app_budgets()))
+            self._block_sync_timer.timeout.connect(self._sync_standalone_tracker)
             self._block_sync_timer.start(5000)
         else:
             self.tracker = None
@@ -60,6 +60,17 @@ class QHealthApp:
 
         # 4. Create System Tray
         self._setup_tray()
+
+    def _sync_standalone_tracker(self):
+        from .db import get_exceeded_app_budgets
+        if is_daemon_running():
+            # Daemon started after the GUI: hand tracking over to avoid double-counting
+            self._block_sync_timer.stop()
+            self.tracker.stop()
+            self.tracker = None
+            self.window.tracker = None
+            return
+        self.tracker.update_blocked_apps(get_exceeded_app_budgets())
 
     def _check_single_instance(self) -> bool:
         socket = QLocalSocket()
@@ -144,13 +155,14 @@ class QHealthApp:
         self.tray_menu.addAction(quit_action)
 
         self.tray.setContextMenu(self.tray_menu)
+        self.tray_menu.aboutToShow.connect(self._refresh_tray_stats)
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
 
         # Tray refresh timer
         self.tray_timer = QTimer(self.app)
         self.tray_timer.timeout.connect(self._refresh_tray_stats)
-        self.tray_timer.start(3000)
+        self.tray_timer.start(15000)
         self._refresh_tray_stats()
 
     def _refresh_tray_stats(self):

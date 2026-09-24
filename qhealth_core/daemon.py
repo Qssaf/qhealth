@@ -13,6 +13,7 @@ from .db import (
     get_all_app_budgets, get_exceeded_app_budgets, vacuum_and_cleanup_db
 )
 from .blocker import force_close_app, send_block_notification
+from .app_resolver import app_resolver
 
 STATE_DIR = Path.home() / ".local" / "share" / "qhealth"
 STATE_FILE = STATE_DIR / "live_state.json"
@@ -140,18 +141,29 @@ class QHealthDaemon:
                         f"{app_name} limit reached ({int(dur_mins)}m / {limit_mins}m)!"
                     )
 
-            # Enforcement: If exceeded and block enabled, ensure app processes are terminated
+            # Enforcement: kill the app when it first exceeds, or whenever it is focused again.
+            # Re-opens are caught instantly by the tracker's focus hook, so there is no need
+            # to rescan /proc for every exceeded app on every loop.
             if a_id in exceeded and b_info.get("block_on_exceed", 1):
                 cur_pid = None
+                is_focused = False
                 with self.tracker.window_lock:
                     cur_app_id = self.tracker.resolved_app_info.get("app_id", "").lower()
                     cur_raw = self.tracker.current_raw_app.lower()
-                    if cur_app_id == a_id or cur_raw == a_id or a_id.endswith(cur_raw) or cur_raw.endswith(a_id):
-                        cur_pid = getattr(self.tracker, "current_pid", None)
+                    if cur_app_id == a_id or (cur_raw and (
+                        cur_raw == a_id or a_id.endswith(f".{cur_raw}") or cur_raw.endswith(f".{a_id}")
+                    )):
+                        is_focused = True
+                        cur_pid = self.tracker.current_pid or None
                         self.tracker.current_raw_app = ""
                         self.tracker.current_title = ""
+                        self.tracker.current_class = ""
                         self.tracker.current_pid = 0
-                force_close_app(a_id, app_name, cur_pid)
+                        self.tracker.resolved_app_info = app_resolver.resolve("")
+                kill_key = f"{today_str}_{a_id}_kill"
+                if is_focused or kill_key not in self.notified_budget_alerts:
+                    self.notified_budget_alerts.add(kill_key)
+                    force_close_app(a_id, app_name, cur_pid)
 
     def _send_notification(self, title: str, message: str):
         try:

@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+import unittest.mock
 import datetime
 import tempfile
 import sqlite3
@@ -482,7 +483,8 @@ class TestBlocker(unittest.TestCase):
         self.assertEqual(get_process_tree(1), [])
         self.assertEqual(get_process_tree(os.getpid()), [])
 
-    def test_notification_throttling(self):
+    @unittest.mock.patch("qhealth_core.blocker.subprocess.run")
+    def test_notification_throttling(self, mock_run):
         from qhealth_core.blocker import send_block_notification, _last_notification_time
         _last_notification_time.clear()
         t0 = datetime.datetime.now().timestamp()
@@ -494,6 +496,87 @@ class TestBlocker(unittest.TestCase):
         # Second call immediately should be throttled (timestamp unchanged)
         send_block_notification("TestApp", 30, "test_app", is_reopen=True)
         self.assertEqual(_last_notification_time["test_app"], recorded_t)
+        self.assertEqual(mock_run.call_count, 1)
+
+    def test_process_matching_is_not_substring_based(self):
+        from qhealth_core.blocker import _process_matches
+        # Exact comm / argv[0] basename
+        self.assertTrue(_process_matches("discord", ["discord"], "discord", "/opt/discord/discord"))
+        # Helper binaries living inside the app's own directory
+        self.assertTrue(_process_matches("discord", ["discord"], "chrome_crashpad", "/opt/discord/chrome_crashpad_handler"))
+        # Truncated comm prefix for long tokens (steam -> steamwebhelper)
+        self.assertTrue(_process_matches("steam", ["steam"], "steamwebhelper", "/home/u/.steam/ubuntu12_64/steamwebhelper"))
+        # Short ids must not match unrelated paths by substring
+        self.assertFalse(_process_matches("vi", [], "libvirtd", "/usr/lib/libvirt/libvirtd"))
+        self.assertFalse(_process_matches("code", ["code"], "python3", "/usr/bin/python3"))
+        self.assertFalse(_process_matches("zed", [], "gzip", "/usr/bin/gzip"))
+
+class TestDaemonBudgetEnforcement(unittest.TestCase):
+    def _make_daemon(self, raw_app="", app_id="desktop", pid=0):
+        from qhealth_core.daemon import QHealthDaemon
+        from qhealth_core.tracker import ActivityTracker
+        d = QHealthDaemon.__new__(QHealthDaemon)
+        d.notified_budget_alerts = set()
+        d.tracker = ActivityTracker.__new__(ActivityTracker)
+        d.tracker.window_lock = __import__("threading").Lock()
+        d.tracker.current_raw_app = raw_app
+        d.tracker.current_title = "title"
+        d.tracker.current_class = raw_app
+        d.tracker.current_pid = pid
+        d.tracker.resolved_app_info = {"app_id": app_id}
+        return d
+
+    def _run(self, d, mock_close):
+        budgets = {"steam": {"app_id": "steam", "daily_limit_minutes": 1, "enabled": 1, "block_on_exceed": 1}}
+        exceeded = {"steam": {"app_id": "steam", "daily_limit_minutes": 1, "block_on_exceed": True}}
+        stats = {"apps": [{"app_id": "steam", "app_name": "Steam", "duration": 120}]}
+        with unittest.mock.patch("qhealth_core.daemon.get_all_app_budgets", return_value=budgets), \
+             unittest.mock.patch("qhealth_core.daemon.send_block_notification"), \
+             unittest.mock.patch.object(d, "_send_notification"):
+            d._check_budget_limits(stats, exceeded)
+
+    @unittest.mock.patch("qhealth_core.daemon.force_close_app")
+    def test_unfocused_exceeded_app_killed_once_and_idle_state_untouched(self, mock_close):
+        # Nothing focused (empty raw app) must not be treated as a match for every app
+        d = self._make_daemon(raw_app="", app_id="desktop")
+        self._run(d, mock_close)
+        mock_close.assert_called_once_with("steam", "Steam", None)
+        self.assertEqual(d.tracker.current_title, "title")
+        # Later loops must not rescan /proc while the app stays unfocused
+        self._run(d, mock_close)
+        self.assertEqual(mock_close.call_count, 1)
+
+    @unittest.mock.patch("qhealth_core.daemon.force_close_app")
+    def test_focused_exceeded_app_killed_with_pid(self, mock_close):
+        d = self._make_daemon(raw_app="steam", app_id="steam", pid=4242)
+        self._run(d, mock_close)
+        self._run(d, mock_close)  # already focused-and-killed state was reset
+        mock_close.assert_called_once_with("steam", "Steam", 4242)
+        self.assertEqual(d.tracker.current_raw_app, "")
+        self.assertEqual(d.tracker.current_pid, 0)
+        self.assertEqual(d.tracker.resolved_app_info.get("app_id"), "desktop")
+
+    @unittest.mock.patch("qhealth_core.daemon.force_close_app")
+    def test_unrelated_focused_app_not_matched(self, mock_close):
+        d = self._make_daemon(raw_app="org.kde.konsole", app_id="org.kde.konsole", pid=777)
+        self._run(d, mock_close)
+        mock_close.assert_called_once_with("steam", "Steam", None)
+        self.assertEqual(d.tracker.current_pid, 777)
+
+class TestDaemonDetection(unittest.TestCase):
+    def test_stale_pid_file_with_recycled_pid(self):
+        from qhealth_core import desktop_app
+        with tempfile.TemporaryDirectory() as tmp:
+            pid_file = Path(tmp) / "daemon.pid"
+            # Our own PID is alive but is not a "main.py --daemon" process
+            pid_file.write_text(str(os.getpid()))
+            with unittest.mock.patch.object(desktop_app, "PID_FILE", pid_file):
+                self.assertFalse(desktop_app.is_daemon_running())
+            pid_file.write_text("garbage")
+            with unittest.mock.patch.object(desktop_app, "PID_FILE", pid_file):
+                self.assertFalse(desktop_app.is_daemon_running())
+            with unittest.mock.patch.object(desktop_app, "PID_FILE", Path(tmp) / "missing.pid"):
+                self.assertFalse(desktop_app.is_daemon_running())
 
 class TestActivityTrackerBlocking(unittest.TestCase):
     def test_tracker_blocking_cache_and_matching(self):

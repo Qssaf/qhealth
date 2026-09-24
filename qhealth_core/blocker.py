@@ -54,7 +54,8 @@ _last_notification_time: Dict[str, float] = {}
 
 GENERIC_TOKENS: Set[str] = {
     "app", "bin", "client", "desktop", "linux", "org", "com", "net", "io",
-    "main", "service", "helper", "daemon", "tool", "manager", "electron"
+    "main", "service", "helper", "daemon", "tool", "manager", "electron",
+    "gnome", "mozilla", "google", "microsoft", "github", "freedesktop"
 }
 
 
@@ -143,6 +144,19 @@ def get_process_tree(root_pid: int) -> List[int]:
     return tree
 
 
+def _process_matches(cleaned_id: str, tokens: List[str], comm: str, exec_path: str) -> bool:
+    """Decides whether a process (by comm and argv[0]) belongs to cleaned_id."""
+    exec_base = os.path.basename(exec_path) if exec_path else ""
+    if cleaned_id == comm or cleaned_id == exec_base:
+        return True
+    # Whole path component only (e.g. /opt/discord/chrome_crashpad_handler),
+    # never a raw substring: 'vi' must not match /usr/lib/libvirt/...
+    if cleaned_id in exec_path.split("/"):
+        return True
+    # comm is truncated to 15 chars by the kernel, so allow a prefix match for long tokens
+    return any(t == comm or t == exec_base or (len(t) >= 5 and comm.startswith(t)) for t in tokens)
+
+
 def find_pids_for_app(app_id: str) -> List[int]:
     """Finds all non-immune processes owned by current user matching app_id."""
     cleaned_id = (app_id or "").lower().strip()
@@ -163,11 +177,10 @@ def find_pids_for_app(app_id: str) -> List[int]:
             if not entry.isdigit():
                 continue
             p = int(entry)
-            if is_immune("", "", p):
-                continue
             try:
+                # Cheap ownership check first, before reading cmdline/comm files
                 stat = os.stat(f"/proc/{p}")
-                if stat.st_uid != uid:
+                if stat.st_uid != uid or is_immune("", "", p):
                     continue
 
                 comm = ""
@@ -185,15 +198,7 @@ def find_pids_for_app(app_id: str) -> List[int]:
                     pass
 
                 exec_path = cmdline.split("\x00")[0] if cmdline else ""
-                exec_base = os.path.basename(exec_path) if exec_path else ""
-
-                matches = False
-                if cleaned_id == comm or cleaned_id == exec_base:
-                    matches = True
-                elif cleaned_id in exec_path and not any(g == comm for g in GENERIC_TOKENS):
-                    matches = True
-                elif any(t == comm or t == exec_base or (t in comm and len(t) >= 5) for t in tokens):
-                    matches = True
+                matches = _process_matches(cleaned_id, tokens, comm, exec_path)
 
                 if matches and not is_immune(cleaned_id, comm, p):
                     matched_pids.append(p)

@@ -319,16 +319,22 @@ class ActivityTracker:
         }
         hookActive();
         """
-        script_path = f"/tmp/qhealth_kwin_{os.getuid()}.js"
+        # Keep the script in the user's private data dir, not world-writable /tmp,
+        # so another local user cannot swap its contents before KWin loads it.
+        script_dir = Path.home() / ".local" / "share" / "qhealth"
+        script_path = str(script_dir / "kwin_focus.js")
         try:
+            script_dir.mkdir(parents=True, exist_ok=True)
             with open(script_path, "w") as f:
                 f.write(kwin_script)
             
-            # Unload any previously loaded script to prevent duplicate signal handlers
-            subprocess.run([
-                "busctl", "--user", "call", "org.kde.KWin", "/Scripting",
-                "org.kde.kwin.Scripting", "unloadScript", "s", script_path
-            ], capture_output=True, timeout=3)
+            # Unload any previously loaded script (including the legacy /tmp one)
+            # to prevent duplicate signal handlers
+            for old_path in (script_path, f"/tmp/qhealth_kwin_{os.getuid()}.js"):
+                subprocess.run([
+                    "busctl", "--user", "call", "org.kde.KWin", "/Scripting",
+                    "org.kde.kwin.Scripting", "unloadScript", "s", old_path
+                ], capture_output=True, timeout=3)
 
             res_load = subprocess.run([
                 "busctl", "--user", "call", "org.kde.KWin", "/Scripting",
@@ -358,7 +364,8 @@ class ActivityTracker:
             proc = None
             try:
                 proc = subprocess.Popen(
-                    ["journalctl", "--user", "-u", "plasma-kwin_wayland.service", "-f", "-n", "0", "-o", "cat"],
+                    ["journalctl", "--user", "-u", "plasma-kwin_wayland.service", "-u", "plasma-kwin_x11.service",
+                     "-f", "-n", "0", "-o", "cat"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
                     text=True
@@ -480,3 +487,6 @@ class ActivityTracker:
             time.sleep(5.0)
             if not self.paused:
                 self._flush_chunk()
+            else:
+                # Don't credit paused time to the first chunk after resuming
+                self.last_flush_time = time.monotonic()
