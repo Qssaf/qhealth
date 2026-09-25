@@ -1156,23 +1156,25 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
             date_condition = "date_str = ?"
             params = [target_date]
 
+        # Rows are matched on app_id alone: the same grouping the app list uses (so totals
+        # agree with it), and the form idx_act_app_date_dur and the rollup's key can serve.
         # 1. Summary stats for this app in the selected range
-        summary_query = f"""
-        SELECT 
-            app_id,
-            app_name,
-            category,
+        cursor.execute(f"""
+        SELECT
             COALESCE(SUM(duration_seconds), 0) as total_duration,
             COALESCE(SUM(keystrokes), 0) as total_keystrokes,
             COALESCE(SUM(clicks), 0) as total_clicks,
             COALESCE(SUM(scrolls), 0) as total_scrolls,
             COUNT(DISTINCT date_str) as active_days
-        FROM activity_log
-        WHERE (app_id = ? OR app_name = ?) AND {date_condition}
-        """
-        cursor.execute(summary_query, [app_id, app_id] + params)
+        FROM daily_app_totals
+        WHERE app_id = ? AND {date_condition}
+        """, [app_id] + params)
         row = cursor.fetchone()
-        summary = dict(row) if row and row["app_id"] else {
+        name_row = cursor.execute(
+            f"SELECT app_name, category FROM activity_log WHERE app_id = ? AND {date_condition} LIMIT 1",
+            [app_id] + params
+        ).fetchone()
+        summary = {"app_id": app_id, "app_name": name_row["app_name"], "category": name_row["category"], **dict(row)} if name_row else {
             "app_id": app_id,
             "app_name": app_id,
             "category": "Other",
@@ -1192,10 +1194,10 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
                 SUM(keystrokes) as keystrokes,
                 SUM(clicks) as clicks
             FROM activity_log
-            WHERE (app_id = ? OR app_name = ?) AND date_str = ?
+            WHERE app_id = ? AND date_str = ?
             GROUP BY hour_int
             ORDER BY hour_int ASC
-            """, (app_id, app_id, target_date))
+            """, (app_id, target_date))
             hourly_map = {r["hour_int"]: dict(r) for r in cursor.fetchall()}
             timeline = []
             for h in range(24):
@@ -1210,11 +1212,11 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
                 SUM(duration_seconds) as duration,
                 SUM(keystrokes) as keystrokes,
                 SUM(clicks) as clicks
-            FROM activity_log
-            WHERE (app_id = ? OR app_name = ?) AND {date_condition}
+            FROM daily_app_totals
+            WHERE app_id = ? AND {date_condition}
             GROUP BY date_str
             ORDER BY date_str ASC
-            """, [app_id, app_id] + params)
+            """, [app_id] + params)
             day_map = {r["date_str"]: dict(r) for r in cursor.fetchall()}
             timeline = []
             for i in range(num_days - 1, -1, -1):
@@ -1235,11 +1237,11 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
                 SUM(duration_seconds) as duration,
                 SUM(keystrokes) as keystrokes,
                 SUM(clicks) as clicks
-            FROM activity_log
-            WHERE (app_id = ? OR app_name = ?) AND {date_condition}
+            FROM daily_app_totals
+            WHERE app_id = ? AND {date_condition}
             GROUP BY month_str
             ORDER BY month_str ASC
-            """, [app_id, app_id] + params)
+            """, [app_id] + params)
             month_map = {r["month_str"]: dict(r) for r in cursor.fetchall()}
             timeline = []
             cur_year = anchor_date.year
@@ -1269,12 +1271,12 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
             SUM(keystrokes) as keystrokes,
             SUM(clicks) as clicks
         FROM activity_log
-        WHERE (app_id = ? OR app_name = ?) AND {date_condition} 
+        WHERE app_id = ? AND {date_condition}
           AND window_title IS NOT NULL AND window_title != ''
         GROUP BY window_title
         ORDER BY duration DESC
         LIMIT 60
-        """, [app_id, app_id] + params)
+        """, [app_id] + params)
         page_rows = cursor.fetchall()
         
         domain_groups = {}

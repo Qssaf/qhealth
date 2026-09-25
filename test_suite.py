@@ -154,6 +154,19 @@ class TestDatabase(unittest.TestCase):
         detail_week = db.get_app_detail_stats("vesktop", "week")
         self.assertEqual(len(detail_week["timeline"]), 7)
 
+    def test_app_detail_matches_leaderboard_totals(self):
+        db.record_activity_chunk("reader", "Reader", "book", 300, 10, 2, 0, "Productivity")
+        # A different app whose recorded display name happens to equal "reader"
+        db.record_activity_chunk("org.other.reader", "reader", "other", 900, 50, 9, 0, "Other")
+        listed = next(a for a in db.get_stats_by_range("day")["apps"] if a["app_id"] == "reader")
+        for rng in ("day", "week", "year", "all_time"):
+            detail = db.get_app_detail_stats("reader", rng)
+            self.assertEqual(detail["total_duration"], listed["duration"], rng)
+            self.assertEqual(detail["total_keystrokes"], 10, rng)
+            self.assertEqual([p["group_name"] for p in detail["pages_breakdown"]], ["Tasks & Windows"], rng)
+            self.assertEqual(detail["active_days"], 1, rng)
+        self.assertEqual(sum(h["duration"] for h in db.get_app_detail_stats("reader", "day")["timeline"]), 300)
+
     def test_parse_window_title_annotations_and_dms(self):
         annotations = db.parse_window_title_info.__annotations__
         self.assertIn("return", annotations)
