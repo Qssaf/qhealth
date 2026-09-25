@@ -1,5 +1,6 @@
 import os
 import time
+import select
 import signal
 import subprocess
 from pathlib import Path
@@ -240,29 +241,68 @@ def force_close_app(app_id: str, app_name: str = "", pid: Optional[int] = None) 
     if not filtered_pids:
         return 0
 
-    # Step 1: Send SIGTERM
-    for p in filtered_pids:
-        try:
-            os.kill(p, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
+    return _terminate_pids(filtered_pids)
 
-    # Step 2: Brief pause for graceful teardown
-    time.sleep(0.15)
 
-    # Step 3: Check remaining living processes and SIGKILL
-    terminated_count = 0
-    for p in filtered_pids:
-        if is_process_running(p):
-            try:
-                os.kill(p, signal.SIGKILL)
-                terminated_count += 1
-            except (ProcessLookupError, PermissionError):
-                pass
+_PID_GONE = -1
+
+
+def _open_pidfd(pid: int) -> Optional[int]:
+    """A pidfd for pid, _PID_GONE if it already exited, or None if pidfds are unavailable."""
+    try:
+        return os.pidfd_open(pid)
+    except ProcessLookupError:
+        return _PID_GONE
+    except (AttributeError, OSError):
+        return None  # Python < 3.9 or kernel < 5.3
+
+
+def _send_signal(pid: int, pidfd: Optional[int], sig: int) -> bool:
+    try:
+        if pidfd is not None:
+            signal.pidfd_send_signal(pidfd, sig)
         else:
-            terminated_count += 1
+            os.kill(pid, sig)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
 
-    return terminated_count
+
+def _terminate_pids(pids: List[int]) -> int:
+    """
+    SIGTERM, a short grace period, then SIGKILL for whatever is still alive.
+    Returns the count of processes that ended up terminated.
+
+    Signals go through pidfds when available: a pidfd keeps referring to the original
+    process, so a PID recycled during the grace period can never receive the SIGKILL.
+    """
+    targets = [(p, _open_pidfd(p)) for p in pids]
+    try:
+        # Step 1: Send SIGTERM
+        for p, fd in targets:
+            if fd != _PID_GONE:
+                _send_signal(p, fd, signal.SIGTERM)
+
+        # Step 2: Brief pause for graceful teardown
+        time.sleep(0.15)
+
+        # Step 3: Check remaining living processes and SIGKILL
+        terminated_count = 0
+        for p, fd in targets:
+            if fd == _PID_GONE:
+                alive = False
+            elif fd is not None:
+                # A pidfd turns readable once its process has exited
+                alive = not select.select([fd], [], [], 0)[0]
+            else:
+                alive = is_process_running(p)
+            if not alive or _send_signal(p, fd, signal.SIGKILL):
+                terminated_count += 1
+        return terminated_count
+    finally:
+        for _, fd in targets:
+            if fd is not None and fd >= 0:
+                os.close(fd)
 
 
 def send_block_notification(app_name: str, limit_mins: int, app_id: str, is_reopen: bool = False):

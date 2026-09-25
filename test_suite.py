@@ -648,6 +648,38 @@ class TestBlocker(unittest.TestCase):
         self.assertEqual(get_process_tree(1), [])
         self.assertEqual(get_process_tree(os.getpid()), [])
 
+    def _spawn(self, ignore_term=False):
+        import subprocess
+        code = ("import signal, sys, time\n"
+                + ("signal.signal(signal.SIGTERM, signal.SIG_IGN)\n" if ignore_term else "")
+                + "print('ready', flush=True)\ntime.sleep(30)\n")
+        child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: child.poll() is None and child.kill())
+        self.assertEqual(child.stdout.readline().strip(), "ready")  # handlers installed
+        return child
+
+    def test_terminate_pids_term_then_kill(self):
+        import signal
+        from qhealth_core.blocker import _terminate_pids
+        polite, stubborn = self._spawn(), self._spawn(ignore_term=True)
+        self.assertEqual(_terminate_pids([polite.pid, stubborn.pid]), 2)
+        self.assertEqual(polite.wait(timeout=5), -signal.SIGTERM)
+        self.assertEqual(stubborn.wait(timeout=5), -signal.SIGKILL)
+
+    def test_terminate_pids_already_exited_and_fallback(self):
+        import signal, subprocess, errno
+        from qhealth_core.blocker import _terminate_pids
+        done = subprocess.Popen([sys.executable, "-c", "pass"])
+        done.wait()  # reaped: its PID may be recycled, so it must never be signalled
+        with unittest.mock.patch("qhealth_core.blocker.os.kill") as kill:
+            self.assertEqual(_terminate_pids([done.pid]), 1)
+            kill.assert_not_called()
+        # Kernels without pidfd support fall back to plain PIDs
+        child = self._spawn(ignore_term=True)
+        with unittest.mock.patch("qhealth_core.blocker.os.pidfd_open", side_effect=OSError(errno.ENOSYS, "nosys")):
+            self.assertEqual(_terminate_pids([child.pid]), 1)
+        self.assertEqual(child.wait(timeout=5), -signal.SIGKILL)
+
     @unittest.mock.patch("qhealth_core.blocker.subprocess.run")
     def test_notification_throttling(self, mock_run):
         from qhealth_core.blocker import send_block_notification, _last_notification_time
