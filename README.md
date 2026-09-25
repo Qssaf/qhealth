@@ -86,6 +86,14 @@ On Fedora:
 sudo dnf install python3 python3-pyqt6
 ```
 
+**Keyboard & mouse access (required).** QHealth detects activity by reading `/dev/input`, which only members of the `input` group can do:
+```bash
+sudo usermod -aG input $USER
+```
+Log out and back in for it to take effect. Without it nothing is recorded, and QHealth shows **NO INPUT ACCESS** (in the dashboard, the panel widget, and a notification from the daemon).
+
+> Note: membership in `input` lets *any* program running as your user read raw keyboard and mouse events, not just QHealth. QHealth itself only stores per-key counts and totals, never what you type in order.
+
 ---
 
 ### Running QHealth
@@ -99,6 +107,12 @@ sudo dnf install python3 python3-pyqt6
 2. **Launch the GUI:**
    ```bash
    python3 main.py
+   ```
+   Optionally install a `qhealth` launcher (the panel widget uses it to open the dashboard):
+   ```bash
+   mkdir -p ~/.local/bin
+   printf '#!/bin/sh\nexec /usr/bin/python3 "%s/main.py" "$@"\n' "$PWD" > ~/.local/bin/qhealth
+   chmod +x ~/.local/bin/qhealth
    ```
 
 3. **Enable 24/7 Background Tracking (Systemd User Service):**
@@ -122,6 +136,15 @@ sudo dnf install python3 python3-pyqt6
    systemctl --user daemon-reload
    systemctl --user enable --now qhealth
    ```
+   With the service running, the GUI is a viewer: closing it (X or Esc) exits completely. Without the service, the GUI does the tracking itself, so closing it keeps it running in the tray (it tells you so); use **Quit** in the tray menu to stop.
+
+4. **Add the Plasma 6 panel widget (optional):**
+   ```bash
+   kpackagetool6 --type Plasma/Applet --install plasma_plasmoid/org.kde.plasma.qhealth
+   # after pulling updates:
+   kpackagetool6 --type Plasma/Applet --upgrade plasma_plasmoid/org.kde.plasma.qhealth
+   ```
+   Then right-click the panel → **Add Widgets…** → **QHealth Status**. It shows today's screen time from the daemon, or **OFF** when the daemon isn't running.
 
 ---
 

@@ -15,15 +15,16 @@ QHealth is a native, offline screen time and hardware activity tracker crafted s
   - Runs headless 24/7 as systemd user service (`qhealth.service`).
   - Asynchronously captures input events via Linux `/dev/input/event*` (`evdev`).
   - Interacts with KWin Wayland via DBus script to monitor focused window/app.
-  - Flushes aggregated chunks every 10 seconds into SQLite database.
+  - Flushes aggregated chunks every 5 seconds into SQLite database.
   - Emits real-time state into `~/.local/share/qhealth/live_state.json`.
 - **GUI Client (`qhealth_gui/main_window.py`, `qhealth_core/desktop_app.py`)**:
   - Native PyQt6 application opened on demand (`python3 main.py`).
   - Detects running daemon via `is_daemon_running()`. If daemon is active, client runs in **viewer-only mode** and does NOT instantiate an `ActivityTracker` (preventing double-counting time/keystrokes).
   - Consumes SQLite database directly and polls `live_state.json` for live pulse/speedometers.
+  - Closing the window quits in viewer-only mode. Without a daemon the GUI is the tracker, so closing hides it to the tray (with a one-time tray message) instead of stopping tracking.
 
 ### 2. Database Layer (`qhealth_core/db.py`)
-- Stored at `~/.local/share/qhealth/qhealth.db`.
+- Stored at `~/.local/share/qhealth/qhealth.db`. The directory is owner-only (0700) because it holds window-title history; keep any new state files inside it.
 - SQLite configuration: WAL mode, `busy_timeout=5000`, `synchronous=NORMAL`, `mmap_size=64MB`.
 - Inactive / idle threshold: Screen time only increments when physical input occurs; auto-pauses after 60s of inactivity.
 - Excluded window IDs: `desktop`, `plasmashell`, `krunner`, `idle`.
@@ -43,6 +44,7 @@ QHealth is a native, offline screen time and hardware activity tracker crafted s
    - Historical date navigation (via `glowing_calendar.py`) passes an `anchor_date`.
    - All timeline and stats queries in `db.py` must anchor on `anchor_date`, never hardcoded `today`.
 3. **Hardware Input Boundaries**:
+   - Reading `/dev/input` needs the `input` group. Never fail silently: `ActivityTracker.input_access_denied` feeds the live state, and the GUI, plasmoid and daemon all surface it.
    - Clamp keycodes to `ev_code < 0x100` (256) to ignore laptop touchpad taps (`BTN_TOUCH` = 330) and gamepads.
    - Mouse wheel events are tracked as `'scroll'`, not `'click'`, preventing Clicks/Min speedometer spikes.
 4. **Website Domain Isolation**:
