@@ -1,6 +1,7 @@
 import os
 import glob
 import hashlib
+import functools
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QIcon, QPixmap, QPainter, QFont
 
@@ -65,8 +66,13 @@ def format_number(num: int) -> str:
         return f"{num / 1_000:.1f}k"
     return f"{num:,}"
 
+@functools.lru_cache(maxsize=256)
 def get_app_icon_pixmap(icon_name: str, app_name: str, size: int = 32) -> QPixmap:
-    """Returns real system icon from KDE theme or direct file paths, or sleek painted fallback."""
+    """Returns real system icon from KDE theme or direct file paths, or sleek painted fallback.
+
+    Cached: widgets rebuild their rows on every poll, and a miss walks several icon dirs.
+    QPixmap is implicitly shared, so handing out the same instance is safe.
+    """
     candidates = []
     if icon_name:
         candidates.extend([
@@ -100,7 +106,10 @@ def get_app_icon_pixmap(icon_name: str, app_name: str, size: int = 32) -> QPixma
                     ico = QIcon(exact_path)
                     if not ico.isNull():
                         return ico.pixmap(size, size)
-            matches = glob.glob(os.path.join(d, f"*{cand}*"))
+            # Fuzzy match only for meaningful names: '*x*' would pick an arbitrary icon
+            if len(cand) < 3:
+                continue
+            matches = glob.glob(os.path.join(d, f"*{glob.escape(cand)}*"))
             if matches:
                 ico = QIcon(matches[0])
                 if not ico.isNull():

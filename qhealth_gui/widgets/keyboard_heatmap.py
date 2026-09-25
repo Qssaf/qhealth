@@ -1,7 +1,7 @@
-from typing import Dict, Any, List, Tuple
-from PyQt6.QtCore import Qt, QRectF, QPoint
+from typing import Dict, List, Tuple
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolTip, QSizePolicy
-from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QLinearGradient
+from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush
 from ..utils import format_number
 
 KEYBOARD_ROWS: List[List[Tuple[int, str, float]]] = [
@@ -179,7 +179,7 @@ class KeyboardHeatmapWidget(QFrame):
             "day": "Day's key frequency",
             "week": "Last 7 days key frequency",
             "month": "Last 30 days key frequency",
-            "year": "This year's key frequency",
+            "year": "Last 12 months' key frequency",
             "all_time": "Lifetime key frequency"
         }
         self.sub_lbl.setText(sub_map.get(range_type, "Key frequency"))

@@ -1,11 +1,10 @@
 import calendar
 import datetime
-from typing import Dict, Any, Callable, Optional
-from PyQt6.QtCore import Qt, QDate, QPoint, pyqtSignal
+from typing import Dict, Any
+from PyQt6.QtCore import Qt, QPoint, pyqtSignal
 from PyQt6.QtWidgets import (
-    QWidget, QDialog, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGridLayout, QSizePolicy
+    QWidget, QDialog, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGridLayout
 )
-from PyQt6.QtGui import QColor, QFont, QCursor
 from qhealth_core.db import get_month_activity_map
 from ..utils import format_duration, format_number
 

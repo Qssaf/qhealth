@@ -1,5 +1,4 @@
 import os
-import sys
 import glob
 import time
 import json
@@ -10,7 +9,7 @@ import subprocess
 import collections
 from pathlib import Path
 from typing import Dict, Any, Optional
-from .db import record_activity_chunk, record_input_heatmap_chunk, init_db
+from .db import record_activity_chunk, record_input_heatmap_chunk, init_db, get_exceeded_app_budgets
 from .app_resolver import app_resolver
 from .blocker import force_close_app, send_block_notification
 
@@ -23,6 +22,16 @@ REL_WHEEL = 8
 REL_HWHEEL = 6
 
 IDLE_THRESHOLD_SECONDS = 60
+
+INPUT_ACCESS_HELP = (
+    "QHealth cannot read keyboard/mouse devices (/dev/input), so no activity is recorded. "
+    "Add yourself to the 'input' group: sudo usermod -aG input $USER, then log out and back in."
+)
+KWIN_CHECK_INTERVAL_TICKS = 12  # aggregator ticks (5s each) between KWin script health checks
+
+# Kept in the user's private data dir, not world-writable /tmp, so another local
+# user cannot swap its contents before KWin loads it.
+KWIN_SCRIPT_PATH = Path.home() / ".local" / "share" / "qhealth" / "kwin_focus.js"
 
 MOUSE_BUTTON_MAP = {
     272: "left",
@@ -59,6 +68,8 @@ class ActivityTracker:
         self.last_input_time = time.monotonic()
         self.last_flush_time = time.monotonic()
         self.is_idle = False
+        # True when /dev/input devices exist but none can be opened (user not in the 'input' group)
+        self.input_access_denied = False
         
         # Current chunk stats (to be flushed to DB)
         self.chunk_keystrokes = 0
@@ -174,30 +185,16 @@ class ActivityTracker:
             "live_cpm": live_cpm,
             "is_idle": idle_state,
             "is_paused": self.paused,
-            "seconds_since_input": int(now - self.last_input_time)
+            "seconds_since_input": int(now - self.last_input_time),
+            "input_access_denied": self.input_access_denied
         }
 
     def _input_loop(self):
         """Monitors all /dev/input/event* devices asynchronously."""
         opened_fds = {}
-        
+
         def refresh_devices():
-            nonlocal opened_fds
-            current_paths = set(glob.glob("/dev/input/event*"))
-            for path in list(opened_fds.keys()):
-                if path not in current_paths:
-                    try:
-                        os.close(opened_fds[path])
-                    except:
-                        pass
-                    del opened_fds[path]
-            for path in current_paths:
-                if path not in opened_fds:
-                    try:
-                        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-                        opened_fds[path] = fd
-                    except Exception:
-                        pass
+            self._refresh_input_devices(opened_fds)
 
         refresh_devices()
         last_refresh = time.time()
@@ -272,6 +269,29 @@ class ActivityTracker:
             except:
                 pass
 
+    def _refresh_input_devices(self, opened_fds: Dict[str, int]):
+        """Opens newly attached /dev/input/event* devices and closes vanished ones."""
+        current_paths = set(glob.glob("/dev/input/event*"))
+        for path in list(opened_fds.keys()):
+            if path not in current_paths:
+                try:
+                    os.close(opened_fds[path])
+                except:
+                    pass
+                del opened_fds[path]
+        denied = 0
+        for path in current_paths:
+            if path not in opened_fds:
+                try:
+                    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                    opened_fds[path] = fd
+                except PermissionError:
+                    denied += 1
+                except Exception:
+                    pass
+        # Without access every minute looks idle and nothing is recorded, so say why
+        self.input_access_denied = not opened_fds and denied > 0
+
     def _inject_kwin_script(self) -> bool:
         """Injects or reloads the active focus monitor in KWin."""
         kwin_script = """
@@ -319,16 +339,19 @@ class ActivityTracker:
         }
         hookActive();
         """
-        script_path = f"/tmp/qhealth_kwin_{os.getuid()}.js"
+        script_path = str(KWIN_SCRIPT_PATH)
         try:
+            KWIN_SCRIPT_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             with open(script_path, "w") as f:
                 f.write(kwin_script)
             
-            # Unload any previously loaded script to prevent duplicate signal handlers
-            subprocess.run([
-                "busctl", "--user", "call", "org.kde.KWin", "/Scripting",
-                "org.kde.kwin.Scripting", "unloadScript", "s", script_path
-            ], capture_output=True, timeout=3)
+            # Unload any previously loaded script (including the legacy /tmp one)
+            # to prevent duplicate signal handlers
+            for old_path in (script_path, f"/tmp/qhealth_kwin_{os.getuid()}.js"):
+                subprocess.run([
+                    "busctl", "--user", "call", "org.kde.KWin", "/Scripting",
+                    "org.kde.kwin.Scripting", "unloadScript", "s", old_path
+                ], capture_output=True, timeout=3)
 
             res_load = subprocess.run([
                 "busctl", "--user", "call", "org.kde.KWin", "/Scripting",
@@ -345,6 +368,19 @@ class ActivityTracker:
             pass
         return False
 
+    def _ensure_kwin_script(self):
+        """Re-injects the focus script if KWin restarted, since a restart drops loaded scripts."""
+        try:
+            res = subprocess.run([
+                "busctl", "--user", "call", "org.kde.KWin", "/Scripting",
+                "org.kde.kwin.Scripting", "isScriptLoaded", "s", str(KWIN_SCRIPT_PATH)
+            ], capture_output=True, text=True, timeout=3)
+        except Exception:
+            return
+        # Only act on a definite "not loaded" answer; no KWin on the bus means nothing to fix
+        if res.returncode == 0 and res.stdout.strip() == "b false":
+            self._inject_kwin_script()
+
     def _kwin_loop(self):
         """Integrates with KDE Plasma 6 KWin via Scripting and journalctl with auto-boot retry."""
         # Retry injection until KWin is ready on DBus (handles cold PC boot)
@@ -353,12 +389,12 @@ class ActivityTracker:
                 break
             time.sleep(2.0)
 
-        last_check = time.time()
         while self.running:
             proc = None
             try:
                 proc = subprocess.Popen(
-                    ["journalctl", "--user", "-u", "plasma-kwin_wayland.service", "-f", "-n", "0", "-o", "cat"],
+                    ["journalctl", "--user", "-u", "plasma-kwin_wayland.service", "-u", "plasma-kwin_x11.service",
+                     "-f", "-n", "0", "-o", "cat"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
                     text=True
@@ -387,9 +423,17 @@ class ActivityTracker:
                             # Check if the focused app is exceeded and blocked
                             blocked_info = self.is_app_blocked(resolved.get("app_id", ""), raw_app, raw_cls)
                             if blocked_info and not is_qhealth:
+                                # The blocked set refreshes every 5s; re-read it so a "+15 min"
+                                # granted a moment ago lets the app open instead of killing it
+                                try:
+                                    self.update_blocked_apps(get_exceeded_app_budgets())
+                                    blocked_info = self.is_app_blocked(resolved.get("app_id", ""), raw_app, raw_cls)
+                                except Exception:
+                                    pass
+                            if blocked_info and not is_qhealth:
                                 target_id = resolved.get("app_id", raw_app)
                                 app_name = resolved.get("display_name", raw_app or "Application")
-                                limit_mins = blocked_info.get("daily_limit_minutes", 0)
+                                limit_mins = blocked_info.get("effective_limit_minutes", blocked_info.get("daily_limit_minutes", 0))
                                 force_close_app(target_id, app_name, pid)
                                 send_block_notification(app_name, limit_mins, target_id, is_reopen=True)
 
@@ -472,11 +516,18 @@ class ActivityTracker:
 
             if key_codes or mouse_btns:
                 record_input_heatmap_chunk(key_codes, mouse_btns)
-        except Exception as e:
+        except Exception:
             pass
 
     def _aggregator_loop(self):
+        ticks = 0
         while self.running:
             time.sleep(5.0)
+            ticks += 1
+            if ticks % KWIN_CHECK_INTERVAL_TICKS == 0:
+                self._ensure_kwin_script()
             if not self.paused:
                 self._flush_chunk()
+            else:
+                # Don't credit paused time to the first chunk after resuming
+                self.last_flush_time = time.monotonic()

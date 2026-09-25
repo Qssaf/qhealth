@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
 from ..utils import format_duration, format_number, get_app_icon_pixmap, get_app_color
 
 class AppRowWidget(QFrame):
-    def __init__(self, app_data: Dict[str, Any], index: int = 0, on_click: Optional[Callable[[Dict[str, Any]], None]] = None, parent=None):
+    def __init__(self, app_data: Dict[str, Any], index: int = 0, on_click: Optional[Callable[[Dict[str, Any]], None]] = None, parent=None, can_block: bool = True):
         super().__init__(parent)
         self.app_data = app_data
         self.on_click = on_click
@@ -44,7 +44,8 @@ class AppRowWidget(QFrame):
         budget_mins = app_data.get("budget_minutes")
         if budget_mins:
             b_pct = app_data.get("budget_percentage", 0)
-            is_blocked = (b_pct is not None and b_pct >= 100 and app_data.get("block_on_exceed", False))
+            # Weekly/monthly usage past N x the daily limit, or a past day, is not "blocked now"
+            is_blocked = (can_block and b_pct is not None and b_pct >= 100 and app_data.get("block_on_exceed", False))
             if is_blocked:
                 b_color = "#f43f5e"
                 badge_text = f"🚫 BLOCKED ({b_pct}%)"
@@ -134,6 +135,7 @@ class AppLeaderboardWidget(QFrame):
         self.setProperty("class", "GlassCard")
 
         self.apps: List[Dict[str, Any]] = []
+        self.can_block = True
         self.sort_by = "duration"
         self.search_text = ""
 
@@ -213,10 +215,11 @@ class AppLeaderboardWidget(QFrame):
         self.search_text = text.lower().strip()
         self._refresh_list()
 
-    def update_apps(self, apps: List[Dict[str, Any]]):
-        if self.apps == apps:
+    def update_apps(self, apps: List[Dict[str, Any]], can_block: bool = True):
+        if self.apps == apps and self.can_block == can_block:
             return
         self.apps = apps
+        self.can_block = can_block
         self.count_lbl.setText(f"{len(apps)} application{'s' if len(apps) != 1 else ''} tracked")
         self._refresh_list()
 
@@ -243,7 +246,7 @@ class AppLeaderboardWidget(QFrame):
             self.scroll_layout.addWidget(empty_lbl)
         else:
             for idx, app in enumerate(filtered):
-                row = AppRowWidget(app, index=idx, on_click=self.on_app_click, parent=self.scroll_content)
+                row = AppRowWidget(app, index=idx, on_click=self.on_app_click, parent=self.scroll_content, can_block=self.can_block)
                 self.scroll_layout.addWidget(row)
 
         self.scroll_layout.addStretch()

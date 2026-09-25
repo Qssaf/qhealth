@@ -1,16 +1,16 @@
 from typing import List, Dict, Any
 from datetime import datetime
-from PyQt6.QtCore import Qt, QRectF, QPoint
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolTip, QSizePolicy
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QLinearGradient
+from PyQt6.QtGui import QPainter, QColor, QBrush, QFont, QLinearGradient
 from ..utils import format_duration, format_number
 
 RANGE_TITLES = {
     "day": ("24-HOUR ACTIVITY TIMELINE", "Hourly active time distribution"),
     "week": ("7-DAY ACTIVITY BREAKDOWN", "Daily screen time across past 7 days"),
     "month": ("30-DAY ACTIVITY BREAKDOWN", "Daily screen time across past 30 days"),
-    "year": ("MONTHLY ACTIVITY DISTRIBUTION", "Monthly breakdown for this year"),
-    "all_time": ("ALL-TIME MONTHLY DISTRIBUTION", "Historical monthly activity")
+    "year": ("MONTHLY ACTIVITY DISTRIBUTION", "Monthly breakdown for the last 12 months"),
+    "all_time": ("ALL-TIME ACTIVITY DISTRIBUTION", "By month, or by year once history spans more than 12 months")
 }
 
 class TimelineBarsPainter(QWidget):
@@ -20,13 +20,15 @@ class TimelineBarsPainter(QWidget):
         self.setMinimumHeight(130)
         self.timeline_data: List[Dict[str, Any]] = []
         self.range_type = "day"
+        self.is_today = True
         self.setMouseTracking(True)
         self.hovered_idx = -1
         self.bar_rects = [] # list of (QRectF, data, label)
 
-    def set_data(self, timeline_data: List[Dict[str, Any]], range_type: str = "day"):
+    def set_data(self, timeline_data: List[Dict[str, Any]], range_type: str = "day", is_today: bool = True):
         self.timeline_data = timeline_data
         self.range_type = range_type
+        self.is_today = is_today
         self.update()
 
     def mouseMoveEvent(self, event):
@@ -66,8 +68,8 @@ class TimelineBarsPainter(QWidget):
         if self.range_type == "day":
             max_duration = max(3600.0, float(max_duration)) # standard 1-hour scale for day
 
-        current_hour = datetime.now().hour
-        is_today_view = (self.range_type == "day")
+        # Only today has a "current hour"; a past day gets no highlight
+        current_hour = datetime.now().hour if self.is_today else -1
 
         for i, item in enumerate(self.timeline_data):
             dur = item.get("duration", 0)
@@ -159,8 +161,8 @@ class HourlyTimelineWidget(QFrame):
         self.painter_widget = TimelineBarsPainter(self)
         lay.addWidget(self.painter_widget)
 
-    def update_data(self, timeline_data: List[Dict[str, Any]], range_type: str = "day"):
+    def update_data(self, timeline_data: List[Dict[str, Any]], range_type: str = "day", is_today: bool = True):
         t_title, t_sub = RANGE_TITLES.get(range_type, ("ACTIVITY TIMELINE", "Activity breakdown"))
         self.title_lbl.setText(t_title)
         self.sub_lbl.setText(t_sub)
-        self.painter_widget.set_data(timeline_data, range_type)
+        self.painter_widget.set_data(timeline_data, range_type, is_today)

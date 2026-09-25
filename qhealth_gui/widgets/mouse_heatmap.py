@@ -1,5 +1,5 @@
-from typing import Dict, Any
-from PyQt6.QtCore import Qt, QRectF, QPoint
+from typing import Dict
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolTip, QSizePolicy
 from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QPainterPath
 from ..utils import format_number
@@ -162,7 +162,7 @@ class MouseHeatmapWidget(QFrame):
             "day": "Day's clicks",
             "week": "Last 7 days clicks",
             "month": "Last 30 days clicks",
-            "year": "This year's clicks",
+            "year": "Last 12 months' clicks",
             "all_time": "Lifetime clicks"
         }
         self.sub_lbl.setText(sub_map.get(range_type, "Clicks"))

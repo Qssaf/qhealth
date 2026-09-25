@@ -1,7 +1,7 @@
 from typing import List, Dict, Any
-from PyQt6.QtCore import Qt, QRectF, QPoint
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolTip, QSizePolicy
-from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush
+from PyQt6.QtGui import QPainter, QColor, QFont, QBrush
 from ..utils import format_duration, format_number
 
 HEATMAP_COLORS = [

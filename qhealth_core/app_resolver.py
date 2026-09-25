@@ -2,7 +2,7 @@ import os
 import glob
 import re
 import configparser
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 DESKTOP_DIRS = [
     os.path.expanduser("~/.local/share/applications"),
@@ -31,6 +31,17 @@ EXPLICIT_OVERRIDES = {
     "vesktop": {"display_name": "Vesktop", "icon": "vesktop", "category": "Communication"},
     "code": {"display_name": "Visual Studio Code", "icon": "vscode", "category": "Development"},
     "code-oss": {"display_name": "Code OSS", "icon": "code-oss", "category": "Development"},
+}
+
+# Terminal emulators are never force-closed; a budget on one only sends reminders.
+# Matched against app ids (whole id or last dotted segment, e.g. org.kde.konsole) and against
+# process names (/proc/<pid>/comm, which the kernel truncates to 15 characters).
+TERMINAL_EMULATORS = {
+    "konsole", "yakuake", "kitty", "alacritty", "wezterm", "wezterm-gui", "foot", "footclient",
+    "xterm", "uxterm", "urxvt", "rxvt", "st", "gnome-terminal", "gnome-terminal-server",
+    "terminal", "console", "kgx", "ptyxis", "xfce4-terminal", "lxterminal", "qterminal",
+    "mate-terminal", "tilix", "terminator", "terminology", "ghostty", "warp", "contour", "rio",
+    "cool-retro-term", "sakura", "guake", "tilda", "blackbox", "deepin-terminal", "cosmic-term",
 }
 
 IDLE_APPS = {
@@ -79,12 +90,25 @@ class AppInfoResolver:
                                 "display_name": name if name else base_id.title(),
                                 "icon": icon if icon else base_id,
                                 "category": category,
-                                "desktop_id": base_id
+                                "desktop_id": base_id,
+                                "is_terminal": "TerminalEmulator" in {c.strip() for c in cats_raw.split(";")}
                             }
                             
                             self._apps_cache[base_id] = info
                 except Exception:
                     pass
+
+    def is_terminal(self, app_id: str) -> bool:
+        """True for terminal emulators, which must never be force-closed."""
+        cleaned = (app_id or "").lower().strip()
+        if cleaned.endswith(".desktop"):
+            cleaned = cleaned[:-8]
+        if not cleaned:
+            return False
+        if cleaned in TERMINAL_EMULATORS or cleaned.rsplit(".", 1)[-1] in TERMINAL_EMULATORS:
+            return True
+        info = self._apps_cache.get(cleaned)
+        return bool(info and info.get("is_terminal"))
 
     def _detect_category(self, cats_raw: str, app_id: str, app_name: str) -> str:
         cats_set = {c.strip() for c in cats_raw.split(";") if c.strip()}
@@ -177,7 +201,8 @@ class AppInfoResolver:
         cleaned_parts = [p for p in re.split(r"[\.\-_/\s]+", f"{cleaned_id} {cleaned_cls}") if p]
         for key, info in self._apps_cache.items():
             key_last = key.split(".")[-1]
-            if key_last and key_last not in {"desktop", "client", "app", "linux"}:
+            # Generic last segments (e.g. io.elementary.terminal) would hijack unrelated apps
+            if key_last and key_last not in {"desktop", "client", "app", "linux", "browser", "terminal", "editor", "player", "viewer"}:
                 if key_last in cleaned_parts or key.endswith(f".{cleaned_id}") or (cleaned_cls and key.endswith(f".{cleaned_cls}")):
                     res = {
                         "app_id": key,

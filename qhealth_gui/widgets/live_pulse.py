@@ -1,6 +1,5 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QLabel
-from PyQt6.QtGui import QColor
 from ..utils import get_app_icon_pixmap
 
 class LivePulseWidget(QFrame):
@@ -97,10 +96,19 @@ class LivePulseWidget(QFrame):
 
         is_paused = data.get("is_paused", False)
         is_idle = data.get("is_idle", False)
+        no_input = data.get("input_access_denied", False)
 
+        # Explain why nothing is being recorded; cleared as soon as access works
+        self.badge.setToolTip(
+            "QHealth cannot read /dev/input, so no activity is recorded.\n"
+            "Fix: sudo usermod -aG input $USER, then log out and back in." if no_input else ""
+        )
         if is_paused:
             self.badge.setText("PAUSED")
             self.badge.setStyleSheet("font-size: 9px; font-weight: 700; color: #fbbf24; background-color: rgba(245,158,11,0.15); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(245,158,11,0.3);")
+        elif no_input:
+            self.badge.setText("NO INPUT ACCESS")
+            self.badge.setStyleSheet("font-size: 9px; font-weight: 700; color: #f87171; background-color: rgba(248,113,113,0.15); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(248,113,113,0.3);")
         elif is_idle:
             self.badge.setText("IDLE / AFK")
             self.badge.setStyleSheet("font-size: 9px; font-weight: 700; color: #94a3b8; background-color: rgba(100,116,139,0.15); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(100,116,139,0.3);")

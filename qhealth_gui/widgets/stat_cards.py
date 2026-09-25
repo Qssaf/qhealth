@@ -1,4 +1,3 @@
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QLabel
 from ..utils import format_number, format_duration
 
