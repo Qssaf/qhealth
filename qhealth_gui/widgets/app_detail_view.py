@@ -121,12 +121,14 @@ class AppTrendBarsPainter(QWidget):
         self.setMinimumHeight(130)
         self.timeline: List[Dict[str, Any]] = []
         self.range_type = "day"
+        self.is_today = True
         self.setMouseTracking(True)
         self.bar_rects = []
 
-    def set_data(self, timeline: List[Dict[str, Any]], range_type: str = "day"):
+    def set_data(self, timeline: List[Dict[str, Any]], range_type: str = "day", is_today: bool = True):
         self.timeline = timeline
         self.range_type = range_type
+        self.is_today = is_today
         self.update()
 
     def mouseMoveEvent(self, event):
@@ -161,7 +163,8 @@ class AppTrendBarsPainter(QWidget):
         if self.range_type == "day":
             max_dur = max(3600.0, float(max_dur))
 
-        current_hour = datetime.now().hour
+        # Only today has a "current hour"; a past day gets no highlight
+        current_hour = datetime.now().hour if self.is_today else -1
 
         for i, item in enumerate(self.timeline):
             dur = item.get("duration", 0)
@@ -606,6 +609,8 @@ class AppDetailView(QWidget):
 
         # Dynamic Range Labels
         r_tag = RANGE_LABELS.get(range_type, "CUSTOM")
+        if range_type == "day" and not self._is_viewing_today():
+            r_tag = self._last_target_date
         self.range_tag_lbl.setText(f"SCREEN TIME ({r_tag})")
         self.trend_title_lbl.setText(TREND_TITLES.get(range_type, "USAGE TREND"))
 
@@ -635,7 +640,7 @@ class AppDetailView(QWidget):
         self._update_budget_ui(dur, limit_mins, range_type)
 
         # Trend bars
-        self.trend_painter.set_data(data.get("timeline", []), range_type)
+        self.trend_painter.set_data(data.get("timeline", []), range_type, self._is_viewing_today())
 
         while self.pages_box.count():
             item = self.pages_box.takeAt(0)

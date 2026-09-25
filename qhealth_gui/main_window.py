@@ -313,13 +313,32 @@ class QHealthMainWindow(QMainWindow):
             pass
 
     def _on_db_timer(self):
+        if not self.isVisible():
+            return  # showEvent refreshes everything on the way back
         self._roll_over_midnight()
+        # The streak is always "as of today", whatever date is being viewed
+        self._refresh_streak()
         # Ranges ending on a past date can't change, so only explicit navigation reloads them.
-        # All Time and the Input page's today-anchored calendar still include today.
-        if (self.selected_date < self._today_str and self.current_range != "all_time"
-                and self.main_stack.currentIndex() != 1):
+        # All Time has no end date, so it still includes today.
+        if self.selected_date < self._today_str and self.current_range != "all_time":
             return
         self._poll_db()
+
+    def _refresh_streak(self):
+        # Streak scans every day's totals; once a minute is plenty
+        if time.monotonic() - self._last_streak_poll < 60:
+            return
+        self._last_streak_poll = time.monotonic()
+        try:
+            streak_days = get_activity_streak_stats().get("current_streak", 0)
+        except Exception:
+            return
+        if streak_days > 0:
+            self.streak_badge.setText(f"🔥 {streak_days}-Day Streak")
+            self.streak_badge.setStyleSheet("font-size: 10px; font-weight: 700; color: #f59e0b; background-color: rgba(245,158,11,0.15); border: 1px solid rgba(245,158,11,0.3); padding: 3px 8px; border-radius: 6px; font-family: 'Inter', sans-serif;")
+        else:
+            self.streak_badge.setText("🌱 Day 0")
+            self.streak_badge.setStyleSheet("font-size: 10px; font-weight: 700; color: #94a3b8; background-color: rgba(148,163,184,0.12); border: 1px solid rgba(148,163,184,0.25); padding: 3px 8px; border-radius: 6px; font-family: 'Inter', sans-serif;")
 
     def _roll_over_midnight(self):
         today_str = datetime.date.today().strftime("%Y-%m-%d")
@@ -334,10 +353,11 @@ class QHealthMainWindow(QMainWindow):
         if not self.isVisible():
             return
         self._roll_over_midnight()
+        self._refresh_streak()
+        viewing_today = self.selected_date == self._today_str
         try:
             stats = get_stats_by_range(self.current_range, self.selected_date)
             total_seconds = stats.get("total_duration", 0)
-            categories = stats.get("categories", [])
             apps = stats.get("apps", [])
             timeline = stats.get("timeline", [])
 
@@ -345,34 +365,19 @@ class QHealthMainWindow(QMainWindow):
             keys = stats.get("total_keystrokes", 0)
             clicks = stats.get("total_clicks", 0)
             scrolls = stats.get("total_scrolls", 0)
-            focus_score = stats.get("focus_score", 100)
-            focus_rating = stats.get("focus_rating", "Deep Work")
+            focus_score = stats.get("focus_score", 0)
+            focus_rating = stats.get("focus_rating", "No Activity")
             top_app = apps[0] if apps else None
             top_name = top_app.get("app_name", "") if top_app else ""
             top_pct = top_app.get("percentage", 0.0) if top_app else 0.0
 
-            # Streak scans the whole history table; once a minute is plenty
-            if time.monotonic() - self._last_streak_poll >= 60:
-                self._last_streak_poll = time.monotonic()
-                try:
-                    streak_info = get_activity_streak_stats()
-                    streak_days = streak_info.get("current_streak", 0)
-                    if streak_days > 0:
-                        self.streak_badge.setText(f"🔥 {streak_days}-Day Streak")
-                        self.streak_badge.setStyleSheet("font-size: 10px; font-weight: 700; color: #f59e0b; background-color: rgba(245,158,11,0.15); border: 1px solid rgba(245,158,11,0.3); padding: 3px 8px; border-radius: 6px; font-family: 'Inter', sans-serif;")
-                    else:
-                        self.streak_badge.setText("🌱 Day 0")
-                        self.streak_badge.setStyleSheet("font-size: 10px; font-weight: 700; color: #94a3b8; background-color: rgba(148,163,184,0.12); border: 1px solid rgba(148,163,184,0.25); padding: 3px 8px; border-radius: 6px; font-family: 'Inter', sans-serif;")
-                except Exception:
-                    pass
-
             self.stat_cards.update_stats(total_seconds, keys, clicks, scrolls, top_name, top_pct, focus_score, focus_rating)
-            self.radial_widget.update_data(total_seconds, apps, self.current_range)
-            self.timeline_widget.update_data(timeline, self.current_range)
+            self.radial_widget.update_data(total_seconds, apps, self.current_range, self.selected_date)
+            self.timeline_widget.update_data(timeline, self.current_range, is_today=viewing_today)
 
             # Update Input & Heatmap Page only while visible (refreshed on page switch)
             if self.main_stack.currentIndex() == 1:
-                calendar_heatmap = get_activity_heatmap_data(days=70)
+                calendar_heatmap = get_activity_heatmap_data(days=70, target_date=self.selected_date)
                 key_heatmap = get_keyboard_heatmap_data(self.current_range, self.selected_date)
                 mouse_heatmap = get_mouse_heatmap_data(self.current_range, self.selected_date)
                 self.input_page_widget.update_data(
@@ -381,7 +386,8 @@ class QHealthMainWindow(QMainWindow):
 
             # Update Applications Page only while visible (refreshed on page switch)
             if self.main_stack.currentIndex() == 2:
-                self.apps_leaderboard.update_apps(apps)
+                # Only today's Day view can say an app is blocked right now
+                self.apps_leaderboard.update_apps(apps, can_block=(self.current_range == "day" and viewing_today))
             if self.main_stack.currentIndex() == 2 and self.apps_sub_stack.currentIndex() == 1 and self.active_drilldown_app_id:
                 detail_stats = get_app_detail_stats(self.active_drilldown_app_id, self.current_range, self.selected_date)
                 self.app_detail_view.set_app_data(detail_stats, self.current_range)

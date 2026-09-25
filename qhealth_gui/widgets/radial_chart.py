@@ -1,4 +1,5 @@
 import math
+import datetime
 from typing import List, Dict, Any
 from PyQt6.QtCore import Qt, QRectF, QPoint
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QToolTip
@@ -161,7 +162,7 @@ class RadialChartWidget(QFrame):
 
         layout.addLayout(content)
 
-    def update_data(self, total_seconds: int, apps: List[Dict[str, Any]], range_type: str = "day"):
+    def update_data(self, total_seconds: int, apps: List[Dict[str, Any]], range_type: str = "day", target_date: str = ""):
         self.ring_painter.set_data(total_seconds, apps)
 
         range_tags = {
@@ -171,7 +172,16 @@ class RadialChartWidget(QFrame):
             "year": "This Year",
             "all_time": "All Time"
         }
-        self.tag_lbl.setText(range_tags.get(range_type, "Custom"))
+        tag = range_tags.get(range_type, "Custom")
+        try:
+            anchor = datetime.datetime.strptime(target_date, "%Y-%m-%d").date() if target_date else None
+        except ValueError:
+            anchor = None
+        # A past anchor: say which day the range ends on instead of "Today" / "Last 7 Days"
+        if anchor and anchor != datetime.date.today() and range_type != "all_time":
+            day_lbl = anchor.strftime("%b %d, %Y")
+            tag = day_lbl if range_type == "day" else f"{tag} to {day_lbl}"
+        self.tag_lbl.setText(tag)
 
         # Clear legend
         while self.legend_layout.count():

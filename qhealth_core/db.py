@@ -826,9 +826,11 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
         if total_duration > 0:
             focus_score = int(round(((prod_secs + (neut_secs * 0.5)) / float(total_duration)) * 100))
         else:
-            focus_score = 100
+            focus_score = 0
 
-        if focus_score >= 75:
+        if total_duration <= 0:
+            focus_rating = "No Activity"
+        elif focus_score >= 75:
             focus_rating = "Deep Work"
         elif focus_score >= 50:
             focus_rating = "Balanced"
@@ -849,10 +851,16 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
         "timeline": timeline
     }
 
-def get_activity_heatmap_data(days: int = 70) -> List[Dict[str, Any]]:
+def get_activity_heatmap_data(days: int = 70, target_date: Optional[str] = None) -> List[Dict[str, Any]]:
+    """The `days` days ending on target_date (defaults to today)."""
     init_db()
     today = datetime.date.today()
-    start_date = (today - datetime.timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    try:
+        anchor_date = datetime.datetime.strptime(target_date, "%Y-%m-%d").date() if target_date else today
+    except ValueError:
+        anchor_date = today
+    start_date = (anchor_date - datetime.timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    end_date = anchor_date.strftime("%Y-%m-%d")
 
     with get_db() as conn:
         cursor = conn.cursor()
@@ -863,10 +871,10 @@ def get_activity_heatmap_data(days: int = 70) -> List[Dict[str, Any]]:
             SUM(keystrokes) as keystrokes,
             SUM(clicks) as clicks
         FROM daily_app_totals
-        WHERE date_str >= ? AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
+        WHERE date_str >= ? AND date_str <= ? AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         GROUP BY date_str
         ORDER BY date_str ASC
-        """, (start_date,))
+        """, (start_date, end_date))
         rows = {r["date_str"]: dict(r) for r in cursor.fetchall()}
 
     max_interactions = 1
@@ -877,7 +885,7 @@ def get_activity_heatmap_data(days: int = 70) -> List[Dict[str, Any]]:
 
     heatmap = []
     for i in range(days - 1, -1, -1):
-        d_obj = today - datetime.timedelta(days=i)
+        d_obj = anchor_date - datetime.timedelta(days=i)
         d_str = d_obj.strftime("%Y-%m-%d")
         item = rows.get(d_str, {"duration": 0, "keystrokes": 0, "clicks": 0})
         

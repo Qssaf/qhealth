@@ -154,6 +154,20 @@ class TestDatabase(unittest.TestCase):
         detail_week = db.get_app_detail_stats("vesktop", "week")
         self.assertEqual(len(detail_week["timeline"]), 7)
 
+    def test_heatmap_anchors_on_selected_date_and_empty_focus(self):
+        db.record_activity_chunk("code", "VS Code", "x", 60, 5, 1, 0, "Development")
+        today = datetime.date.today()
+        past = (today - datetime.timedelta(days=100)).strftime("%Y-%m-%d")
+        heat = db.get_activity_heatmap_data(days=70, target_date=past)
+        self.assertEqual(len(heat), 70)
+        self.assertEqual(heat[-1]["date"], past)
+        self.assertEqual(sum(d["duration"] for d in heat), 0)  # today's activity is outside the window
+        self.assertEqual(db.get_activity_heatmap_data(days=70)[-1]["duration"], 60)
+
+        empty = db.get_stats_by_range("day", past)
+        self.assertEqual((empty["focus_score"], empty["focus_rating"]), (0, "No Activity"))
+        self.assertEqual(db.get_stats_by_range("day")["focus_rating"], "Deep Work")
+
     def test_app_detail_matches_leaderboard_totals(self):
         db.record_activity_chunk("reader", "Reader", "book", 300, 10, 2, 0, "Productivity")
         # A different app whose recorded display name happens to equal "reader"
@@ -464,6 +478,51 @@ class TestGUIWidgets(unittest.TestCase):
         win.current_range = "day"
         win._on_date_changed(d(1))            # picking yesterday must stay on yesterday
         self.assertEqual(win.selected_date, d(1))
+        win.close()
+
+    def test_past_date_labels_and_blocked_pill(self):
+        from PyQt6.QtWidgets import QLabel
+        radial = self.RadialChartWidget()
+        radial.update_data(60, [], "day", datetime.date.today().strftime("%Y-%m-%d"))
+        self.assertEqual(radial.tag_lbl.text(), "Today")
+        radial.update_data(60, [], "day", "2026-01-05")
+        self.assertEqual(radial.tag_lbl.text(), "Jan 05, 2026")
+        radial.update_data(60, [], "week", "2026-01-05")
+        self.assertEqual(radial.tag_lbl.text(), "Last 7 Days to Jan 05, 2026")
+
+        timeline = self.HourlyTimelineWidget()
+        timeline.update_data([{"hour_int": 0, "duration": 5}], "day", is_today=False)
+        self.assertFalse(timeline.painter_widget.is_today)
+
+        app_row = {"app_id": "steam", "app_name": "Steam", "duration": 7200, "percentage": 100.0,
+                   "budget_minutes": 60, "budget_percentage": 100.0, "block_on_exceed": True}
+        board = self.AppLeaderboardWidget()
+        def texts():
+            # Replaced rows are only deleteLater()'d, so read the rows currently in the layout
+            lay = board.scroll_layout
+            rows = [lay.itemAt(i).widget() for i in range(lay.count()) if lay.itemAt(i).widget()]
+            return " ".join(l.text() for r in rows for l in r.findChildren(QLabel))
+        board.update_apps([app_row], can_block=True)
+        self.assertIn("BLOCKED", texts())
+        board.update_apps([app_row], can_block=False)  # same apps, different context
+        self.assertNotIn("BLOCKED", texts())
+
+    def test_past_date_input_page_is_static_but_streak_updates(self):
+        win = self.QHealthMainWindow(None)
+        win.show()
+        win.selected_date = "2020-01-01"
+        win._switch_main_page(1)
+        win._last_streak_poll = 0.0
+        with unittest.mock.patch.object(win, "_poll_db") as poll, \
+             unittest.mock.patch("qhealth_gui.main_window.get_activity_streak_stats", return_value={"current_streak": 3}):
+            win._on_db_timer()
+            poll.assert_not_called()   # the Input page now anchors on the selected (past) date
+        self.assertIn("3-Day Streak", win.streak_badge.text())
+        win.hide()
+        win._last_streak_poll = 0.0
+        with unittest.mock.patch("qhealth_gui.main_window.get_activity_streak_stats") as streak:
+            win._on_db_timer()         # hidden in the tray: no DB work at all
+            streak.assert_not_called()
         win.close()
 
     def test_budget_extension_button(self):
