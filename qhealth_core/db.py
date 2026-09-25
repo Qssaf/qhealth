@@ -360,7 +360,8 @@ def get_budget_usage(date_str: Optional[str] = None) -> Dict[str, Dict[str, Any]
             "daily_limit_minutes": r["daily_limit_minutes"],
             "extra_minutes": r["extra_minutes"],
             "effective_limit_minutes": r["daily_limit_minutes"] + r["extra_minutes"],
-            "block_on_exceed": bool(r["block_on_exceed"]),
+            # Terminals are never force-closed, whatever the stored flag says
+            "block_on_exceed": bool(r["block_on_exceed"]) and not app_resolver.is_terminal(r["app_id"]),
             "used_seconds": r["used_seconds"],
             "used_minutes": round(r["used_seconds"] / 60.0, 1),
         }
@@ -763,13 +764,13 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
                 if range_type == "all_time":
                     app["budget_minutes"] = limit_mins
                     app["budget_percentage"] = None
-                    app["block_on_exceed"] = bool(b_info.get("block_on_exceed", 1))
+                    app["block_on_exceed"] = bool(b_info.get("block_on_exceed", 1)) and not app_resolver.is_terminal(a_id)
                 else:
                     total_limit_secs = limit_mins * 60 * range_days
                     app["budget_minutes"] = limit_mins * range_days if range_days > 1 else limit_mins
                     app["daily_limit_minutes"] = limit_mins
                     app["budget_percentage"] = min(100.0, round((app["duration"] / float(total_limit_secs)) * 100, 1))
-                    app["block_on_exceed"] = bool(b_info.get("block_on_exceed", 1))
+                    app["block_on_exceed"] = bool(b_info.get("block_on_exceed", 1)) and not app_resolver.is_terminal(a_id)
             else:
                 app["budget_minutes"] = None
                 app["budget_percentage"] = None
@@ -1363,6 +1364,7 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
     summary["target_date"] = target_date
     summary["budget"] = get_app_budget(app_id)
     summary["budget_extra_minutes"] = get_budget_extensions(target_date).get(app_id.lower(), 0)
+    summary["is_terminal"] = app_resolver.is_terminal(app_id)
 
     return summary
 

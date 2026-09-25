@@ -239,6 +239,7 @@ class AppDetailView(QWidget):
         self._last_range_type = "day"
         self._last_target_date = ""
         self._last_extra_minutes = 0
+        self._is_terminal = False
         self._is_updating = False
 
         root_lay = QVBoxLayout(self)
@@ -419,6 +420,11 @@ class AppDetailView(QWidget):
         self.block_checkbox.toggled.connect(self._on_block_checkbox_toggled)
         self.budget_progress_box.addWidget(self.block_checkbox)
 
+        self.terminal_note = QLabel("Terminals are never force-closed; this limit only sends reminders.")
+        self.terminal_note.setStyleSheet("font-size: 11px; color: #64748b; padding-top: 4px;")
+        self.terminal_note.setVisible(False)
+        self.budget_progress_box.addWidget(self.terminal_note)
+
         b_lay.addLayout(self.budget_progress_box)
 
         main_lay.addWidget(self.budget_card)
@@ -512,8 +518,12 @@ class AppDetailView(QWidget):
             set_app_budget(self.current_app_id, limit_mins, enabled=(limit_mins > 0), block_on_exceed=block_on_exceed)
         except Exception:
             return
-        self.block_checkbox.setVisible(limit_mins > 0)
+        self._update_block_option_visibility(limit_mins)
         self._update_budget_ui(self._last_duration, limit_mins, self._last_range_type)
+
+    def _update_block_option_visibility(self, limit_mins: int):
+        self.block_checkbox.setVisible(limit_mins > 0 and not self._is_terminal)
+        self.terminal_note.setVisible(limit_mins > 0 and self._is_terminal)
 
     def _on_block_checkbox_toggled(self, checked: bool):
         if self._is_updating or not self.current_app_id:
@@ -602,6 +612,7 @@ class AppDetailView(QWidget):
         self._last_range_type = range_type
         self._last_target_date = data.get("target_date", "")
         self._last_extra_minutes = data.get("budget_extra_minutes", 0)
+        self._is_terminal = bool(data.get("is_terminal", False))
 
         self.name_lbl.setText(app_name)
         self.id_lbl.setText(f"({app_id})")
@@ -634,7 +645,7 @@ class AppDetailView(QWidget):
             idx = self.budget_combo.findData(limit_mins)
         self.budget_combo.setCurrentIndex(max(idx, 0))
         self.block_checkbox.setChecked(block_on_exceed)
-        self.block_checkbox.setVisible(limit_mins > 0)
+        self._update_block_option_visibility(limit_mins)
         self._is_updating = False
 
         self._update_budget_ui(dur, limit_mins, range_type)

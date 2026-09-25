@@ -1,8 +1,10 @@
 import os
+import atexit
 import sys
 import unittest
 import unittest.mock
 import datetime
+import time
 import tempfile
 import sqlite3
 from pathlib import Path
@@ -18,6 +20,7 @@ from qhealth_gui.utils import get_category_color
 # Never touch the real ~/.local/share/qhealth database: every test (including ones that
 # only build an ActivityTracker or resolve apps) uses a throwaway DB by default.
 _TEST_DB_DIR = tempfile.TemporaryDirectory()
+atexit.register(_TEST_DB_DIR.cleanup)
 db.DB_DIR = Path(_TEST_DB_DIR.name)
 db.DB_PATH = db.DB_DIR / "qhealth.db"
 
@@ -711,6 +714,7 @@ class TestBlocker(unittest.TestCase):
                 + ("signal.signal(signal.SIGTERM, signal.SIG_IGN)\n" if ignore_term else "")
                 + "print('ready', flush=True)\ntime.sleep(30)\n")
         child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(child.stdout.close)
         self.addCleanup(lambda: child.poll() is None and child.kill())
         self.assertEqual(child.stdout.readline().strip(), "ready")  # handlers installed
         return child
@@ -959,6 +963,83 @@ class TestFocusHookBlocking(unittest.TestCase):
         self._focus(tracker, "focusgame")
         self.assertEqual(mock_close.call_count, 1)
         self.assertEqual(tracker.current_raw_app, "focusgame")
+
+class TestTerminalsAndLaunchedProcesses(unittest.TestCase):
+    def test_terminal_detection(self):
+        for app_id in ("org.kde.konsole", "konsole", "kitty", "Alacritty", "com.mitchellh.ghostty",
+                       "org.gnome.Console", "org.gnome.Ptyxis", "io.elementary.terminal", "org.kde.yakuake.desktop"):
+            self.assertTrue(app_resolver.is_terminal(app_id), app_id)
+        for app_id in ("code", "brave-browser", "steam", "org.kde.dolphin", "vesktop", ""):
+            self.assertFalse(app_resolver.is_terminal(app_id), app_id)
+        # Anything whose .desktop file says Categories=...;TerminalEmulator;
+        app_resolver._apps_cache["com.example.fancyterm"] = {"display_name": "Fancy", "icon": "", "category": "Development", "is_terminal": True}
+        self.addCleanup(app_resolver._apps_cache.pop, "com.example.fancyterm")
+        self.assertTrue(app_resolver.is_terminal("com.example.fancyterm"))
+
+    def test_terminals_are_never_force_closed(self):
+        from qhealth_core.blocker import is_immune, force_close_app
+        self.assertTrue(is_immune("org.kde.konsole"))  # the real Plasma 6 id; previously killable
+        self.assertTrue(is_immune("", "Konsole"))
+        with unittest.mock.patch("qhealth_core.blocker.find_pids_for_app") as scan:
+            self.assertEqual(force_close_app("org.kde.konsole", "Konsole", 4242), 0)
+            scan.assert_not_called()
+
+    def test_terminal_budget_warns_but_never_blocks(self):
+        db.set_app_budget("org.kde.konsole", 1, block_on_exceed=True)
+        self.addCleanup(db.set_app_budget, "org.kde.konsole", 0, False)
+        db.record_activity_chunk("org.kde.konsole", "Konsole", "zsh", 120, 0, 0, 0, "Development")
+        exceeded = db.get_exceeded_app_budgets()
+        self.assertIn("org.kde.konsole", exceeded)              # still over its limit (reminders)
+        self.assertFalse(exceeded["org.kde.konsole"]["block_on_exceed"])
+        konsole = next(a for a in db.get_stats_by_range("day")["apps"] if a["app_id"] == "org.kde.konsole")
+        self.assertFalse(konsole["block_on_exceed"])            # no BLOCKED pill
+        self.assertTrue(db.get_app_detail_stats("org.kde.konsole")["is_terminal"])
+
+    def test_blocking_closes_launched_processes_but_spares_terminals(self):
+        import signal, subprocess
+        from qhealth_core.blocker import get_process_tree, _terminate_pids
+        # app -> plain child (a helper it launched)
+        #     -> child renamed "konsole" (a terminal it launched) -> grandchild (runs in that terminal)
+        code = (
+            "import ctypes, subprocess, sys, time\n"
+            "helper = subprocess.Popen(['sleep', '60'])\n"
+            "term = subprocess.Popen([sys.executable, '-c', "
+            "'import ctypes, subprocess, time; ctypes.CDLL(None).prctl(15, b\"konsole\", 0, 0, 0); "
+            "shell = subprocess.Popen([\"sleep\", \"60\"]); print(shell.pid, flush=True); time.sleep(60)'], "
+            "stdout=subprocess.PIPE, text=True)\n"
+            "shell_pid = term.stdout.readline().strip()\n"
+            "print(helper.pid, term.pid, shell_pid, flush=True)\n"
+            "time.sleep(60)\n"
+        )
+        app = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        helper_pid, term_pid, shell_pid = map(int, app.stdout.readline().split())
+        def cleanup():
+            for pid in (app.pid, helper_pid, term_pid, shell_pid):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            app.wait(timeout=5)
+            app.stdout.close()
+        self.addCleanup(cleanup)
+        if app.pid <= 100:
+            self.skipTest("PIDs <= 100 are always immune")
+        with open(f"/proc/{term_pid}/comm") as f:
+            self.assertEqual(f.read().strip(), "konsole")
+
+        tree = get_process_tree(app.pid)
+        self.assertIn(app.pid, tree)
+        self.assertIn(helper_pid, tree)       # things the app launched are closed with it
+        self.assertNotIn(term_pid, tree)      # a terminal it launched is not
+        self.assertNotIn(shell_pid, tree)     # nor anything running inside that terminal
+
+        _terminate_pids(tree)
+        self.assertEqual(app.wait(timeout=5), -signal.SIGTERM)
+        time.sleep(0.2)
+        for pid in (term_pid, shell_pid):
+            with open(f"/proc/{pid}/status") as f:
+                state = next(l for l in f if l.startswith("State:")).split()[1]
+            self.assertNotIn(state, ("Z", "X"), f"pid {pid} should still be running")
 
 class TestInputAccessWarning(unittest.TestCase):
     def test_detects_permission_denied_devices(self):

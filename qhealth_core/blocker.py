@@ -5,6 +5,7 @@ import signal
 import subprocess
 from pathlib import Path
 from typing import Set, List, Optional, Dict
+from .app_resolver import app_resolver, TERMINAL_EMULATORS
 
 # System-critical apps and desktop components that must NEVER be killed
 IMMUNE_APP_IDS: Set[str] = {
@@ -50,6 +51,9 @@ IMMUNE_EXEC_NAMES: Set[str] = {
     "xdg-desktop-portal-kde",
 }
 
+# Terminal emulator process names as they appear in /proc/<pid>/comm (max 15 chars)
+TERMINAL_PROCESS_NAMES: Set[str] = {name[:15] for name in TERMINAL_EMULATORS}
+
 _last_notification_time: Dict[str, float] = {}
 
 
@@ -75,6 +79,10 @@ def is_immune(app_id: str, app_name: str = "", pid: Optional[int] = None) -> boo
         if imm in app_lower or imm in name_lower:
             return True
 
+    # Terminals are never blockable, whatever id they report (e.g. org.kde.konsole)
+    if app_resolver.is_terminal(app_lower) or app_resolver.is_terminal(name_lower):
+        return True
+
     if pid is not None:
         if pid <= 100 or pid == os.getpid() or pid == os.getppid():
             return True
@@ -86,10 +94,11 @@ def is_immune(app_id: str, app_name: str = "", pid: Optional[int] = None) -> boo
                     if imm in cmdline:
                         return True
 
-            # Check process comm name
+            # Check process comm name. A terminal is spared together with everything running
+            # in it: the process-tree walk never descends past an immune process.
             with open(f"/proc/{pid}/comm", "r") as f:
                 comm = f.read().strip().lower()
-                if comm in IMMUNE_EXEC_NAMES:
+                if comm in IMMUNE_EXEC_NAMES or comm in TERMINAL_PROCESS_NAMES:
                     return True
         except Exception:
             pass
