@@ -341,7 +341,7 @@ class ActivityTracker:
         """
         script_path = str(KWIN_SCRIPT_PATH)
         try:
-            KWIN_SCRIPT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            KWIN_SCRIPT_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             with open(script_path, "w") as f:
                 f.write(kwin_script)
             

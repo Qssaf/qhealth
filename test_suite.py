@@ -970,6 +970,40 @@ class TestInputAccessWarning(unittest.TestCase):
         notify.assert_called_once()
         self.assertIn("usermod -aG input", notify.call_args.args[1])
 
+class TestPrivacyAndInstanceIsolation(unittest.TestCase):
+    def test_data_dir_is_owner_only(self):
+        import stat
+        orig = (db.DB_DIR, db.DB_PATH)
+        self.addCleanup(lambda: setattr(db, "DB_DIR", orig[0]) or setattr(db, "DB_PATH", orig[1]))
+        with tempfile.TemporaryDirectory() as tmp:
+            for existing in (False, True):
+                data_dir = Path(tmp) / f"qhealth_{existing}"
+                if existing:
+                    data_dir.mkdir(mode=0o755)  # created by an older version
+                    os.chmod(data_dir, 0o755)
+                db.DB_DIR, db.DB_PATH = data_dir, data_dir / "qhealth.db"
+                db.init_db(force=True)
+                self.assertEqual(stat.S_IMODE(data_dir.stat().st_mode), 0o700, f"existing={existing}")
+
+    def test_single_instance_socket_is_per_user(self):
+        from PyQt6.QtNetwork import QLocalServer, QLocalSocket
+        from qhealth_core.desktop_app import _single_instance_socket_name
+        with tempfile.TemporaryDirectory() as runtime:
+            with unittest.mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": runtime}):
+                name = _single_instance_socket_name()
+            self.assertEqual(name, os.path.join(runtime, "qhealth.sock"))
+            # Qt accepts a full path: the socket really lives in the private runtime dir
+            server = QLocalServer()
+            self.assertTrue(server.listen(name))
+            client = QLocalSocket()
+            client.connectToServer(name)
+            self.assertTrue(client.waitForConnected(1000))
+            self.assertTrue(os.path.exists(name))
+            client.disconnectFromServer()
+            server.close()
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(_single_instance_socket_name(), f"qhealth_single_instance_{os.getuid()}")
+
 class TestKWinScriptRecovery(unittest.TestCase):
     def _run(self, returncode, stdout):
         from qhealth_core.tracker import ActivityTracker

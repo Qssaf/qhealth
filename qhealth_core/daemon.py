@@ -23,7 +23,7 @@ class QHealthDaemon:
         self.break_reminder = BreakReminder(self.tracker)
 
     def start(self):
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
         
         try:
             import fcntl

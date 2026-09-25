@@ -1,3 +1,4 @@
+import os
 import sys
 import datetime
 from pathlib import Path
@@ -17,7 +18,14 @@ from .db import (
 from qhealth_gui.main_window import QHealthMainWindow, create_app_icon
 from qhealth_gui.utils import format_duration, format_number
 
-SOCKET_NAME = "qhealth_single_instance_socket"
+def _single_instance_socket_name() -> str:
+    # Per user: a fixed name in /tmp is shared by every account on the machine
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime_dir and os.path.isdir(runtime_dir):
+        return os.path.join(runtime_dir, "qhealth.sock")
+    return f"qhealth_single_instance_{os.getuid()}"
+
+SOCKET_NAME = _single_instance_socket_name()
 STATE_FILE = Path.home() / ".local" / "share" / "qhealth" / "live_state.json"
 PID_FILE = Path.home() / ".local" / "share" / "qhealth" / "daemon.pid"
 

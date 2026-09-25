@@ -1,3 +1,4 @@
+import os
 import re
 import urllib.parse
 import sqlite3
@@ -51,7 +52,7 @@ RE_DOMAIN = re.compile(r"\b([a-zA-Z0-9-]+\.(?:com|org|net|io|dev|app|ai|me|cc|gg
 
 @contextmanager
 def get_db():
-    DB_DIR.mkdir(parents=True, exist_ok=True)
+    DB_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=10.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000;")
@@ -173,6 +174,13 @@ def init_db(force: bool = False):
     global _db_initialized
     if _db_initialized and not force:
         return
+
+    # The DB and live_state.json hold window-title history: owner-only, fixing older 0755 dirs too
+    DB_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        os.chmod(DB_DIR, 0o700)
+    except OSError:
+        pass
 
     with get_db() as conn:
         cursor = conn.cursor()
