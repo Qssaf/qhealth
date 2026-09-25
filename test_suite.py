@@ -479,6 +479,28 @@ class TestGUIWidgets(unittest.TestCase):
         self.assertEqual(win.selected_date, d(1))
         win.close()
 
+    def test_window_close_quits_viewer_but_keeps_tracker(self):
+        from qhealth_core.desktop_app import QHealthApp
+        win = self.QHealthMainWindow(None)
+        win.on_close = unittest.mock.Mock()
+        win.show()
+        win.close()
+        win.on_close.assert_called_once()
+
+        qa = QHealthApp.__new__(QHealthApp)
+        qa.tray = unittest.mock.Mock()
+        qa._tray_hint_shown = False
+        with unittest.mock.patch.object(QHealthApp, "quit") as quit_:
+            qa.tracker = None                 # daemon running: viewer only
+            qa._on_window_closed()
+            quit_.assert_called_once()
+            quit_.reset_mock()
+            qa.tracker = unittest.mock.Mock() # no daemon: this process tracks
+            qa._on_window_closed()
+            qa._on_window_closed()
+            quit_.assert_not_called()
+        qa.tray.showMessage.assert_called_once()  # told once, not on every close
+
     def test_live_card_explains_missing_input_access(self):
         live = self.LivePulseWidget()
         live.update_metrics({"active_app": "Desktop", "is_idle": True, "input_access_denied": True})

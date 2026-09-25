@@ -58,6 +58,7 @@ class QHealthMainWindow(QMainWindow):
         self._today_str = self.selected_date
         self._last_streak_poll = 0.0
         self.active_drilldown_app_id = ""
+        self.on_close = None  # set by the app to decide between quitting and staying in the tray
 
         self.setWindowTitle("QHealth")
         self.resize(1180, 820)
@@ -267,6 +268,11 @@ class QHealthMainWindow(QMainWindow):
             self.tracker.paused = new_paused
         self.btn_pause.setText("Resume" if new_paused else "Pause")
         self.btn_pause.setChecked(new_paused)
+
+    def closeEvent(self, event):
+        super().closeEvent(event)
+        if self.on_close:
+            self.on_close()
 
     def showEvent(self, event):
         super().showEvent(event)

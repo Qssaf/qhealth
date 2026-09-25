@@ -64,6 +64,8 @@ class QHealthApp:
 
         # 3. Create Main Window
         self.window = QHealthMainWindow(self.tracker)
+        self.window.on_close = self._on_window_closed
+        self._tray_hint_shown = False
 
         # 4. Create System Tray
         self._setup_tray()
@@ -270,6 +272,20 @@ class QHealthApp:
         self.window.setWindowState(self.window.windowState() & ~Qt.WindowState.WindowMinimized | Qt.WindowState.WindowActive)
         self.window.raise_()
         self.window.activateWindow()
+
+    def _on_window_closed(self):
+        if self.tracker is None:
+            # Viewer only: the daemon keeps tracking, so nothing needs to stay resident
+            self.quit()
+        elif not self._tray_hint_shown:
+            # This process is the tracker (no daemon), so closing must not stop it, but say so
+            self._tray_hint_shown = True
+            self.tray.showMessage(
+                "QHealth is still tracking",
+                "No background service is running, so QHealth keeps tracking from the tray. "
+                "Use Quit in the tray menu to stop.",
+                QSystemTrayIcon.MessageIcon.Information, 6000
+            )
 
     def quit(self):
         if self.local_server:
