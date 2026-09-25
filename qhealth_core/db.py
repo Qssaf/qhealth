@@ -86,7 +86,33 @@ def get_category_for_app(app_id: str, app_name: str) -> str:
 
 _db_initialized = False
 
-ROLLUP_SCHEMA_VERSION = 1
+# PRAGMA user_version steps: 1 = daily_app_totals rollup, 2 = compact activity_log layout
+SCHEMA_VERSION = 2
+
+# Rows are stored in primary-key order, so the key *is* the table: no rowid, no separate
+# unique index holding a second copy of every window title, and date-range reads are
+# sequential. timestamp is only kept so a pre-v2 daemon that is still running can keep
+# writing (its upsert sets it); current code leaves it NULL.
+ACTIVITY_LOG_COLUMNS = (
+    "date_str, hour_int, app_id, app_name, window_title, category, "
+    "duration_seconds, keystrokes, clicks, scrolls"
+)
+ACTIVITY_LOG_DDL = """
+CREATE TABLE IF NOT EXISTS {name} (
+    date_str TEXT NOT NULL,
+    hour_int INTEGER NOT NULL,
+    app_id TEXT NOT NULL,
+    app_name TEXT NOT NULL,
+    window_title TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL,
+    duration_seconds INTEGER NOT NULL DEFAULT 0,
+    keystrokes INTEGER NOT NULL DEFAULT 0,
+    clicks INTEGER NOT NULL DEFAULT 0,
+    scrolls INTEGER NOT NULL DEFAULT 0,
+    timestamp DATETIME,
+    PRIMARY KEY (date_str, hour_int, app_id, window_title)
+) WITHOUT ROWID
+"""
 
 def _rollup_add_sql(sign: str, row: str) -> str:
     """SQL that adds (sign '+') or subtracts (sign '-') trigger row `row` (NEW/OLD) into daily_app_totals."""
@@ -113,16 +139,46 @@ _ROLLUP_PRUNE_OLD_SQL = """
           AND duration_seconds = 0 AND keystrokes = 0 AND clicks = 0 AND scrolls = 0;
 """
 
-def _init_daily_rollup(conn: sqlite3.Connection):
+def _create_rollup_triggers(conn: sqlite3.Connection):
+    conn.execute(f"""
+    CREATE TRIGGER IF NOT EXISTS trg_rollup_insert AFTER INSERT ON activity_log BEGIN
+        {_rollup_add_sql('+', 'NEW')}
+    END
+    """)
+    conn.execute(f"""
+    CREATE TRIGGER IF NOT EXISTS trg_rollup_update
+    AFTER UPDATE OF date_str, app_id, category, duration_seconds, keystrokes, clicks, scrolls ON activity_log
+    BEGIN
+        {_rollup_add_sql('-', 'OLD')}
+        {_rollup_add_sql('+', 'NEW')}
+        {_ROLLUP_PRUNE_OLD_SQL}
+    END
+    """)
+    conn.execute(f"""
+    CREATE TRIGGER IF NOT EXISTS trg_rollup_delete AFTER DELETE ON activity_log BEGIN
+        {_rollup_add_sql('-', 'OLD')}
+        {_ROLLUP_PRUNE_OLD_SQL}
+    END
+    """)
+
+def _migrate(conn: sqlite3.Connection) -> bool:
     """
-    Per-day totals of activity_log, kept exact by triggers so week/month/year views scan
-    a few thousand rows instead of every hourly/per-title row. Triggers (not Python code)
-    keep it in sync, so it stays correct even while an older daemon build is writing.
+    Brings the schema up to SCHEMA_VERSION in one transaction, so a crash leaves either the
+    old or the new layout, never a mix. Returns True when activity_log was rebuilt.
+
+    v1: daily_app_totals, per-day totals of activity_log kept exact by triggers, so
+        week/month/year views scan a few thousand rows instead of every hourly row.
+        Triggers (not Python code) keep it in sync, even while an older daemon is writing.
+    v2: rebuild activity_log in the compact layout (ACTIVITY_LOG_DDL). Every row is kept.
     """
+    # A process starting at the same moment waits for the migration instead of failing
+    conn.execute("PRAGMA busy_timeout = 60000")
     conn.execute("BEGIN IMMEDIATE")
+    rebuilt = False
     try:
-        # Re-check under the write lock so a concurrently starting daemon/GUI can't backfill twice
-        if conn.execute("PRAGMA user_version").fetchone()[0] < ROLLUP_SCHEMA_VERSION:
+        # Re-read under the write lock so two processes can't migrate twice
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < 1:
             conn.execute("""
             CREATE TABLE IF NOT EXISTS daily_app_totals (
                 date_str TEXT NOT NULL,
@@ -135,26 +191,7 @@ def _init_daily_rollup(conn: sqlite3.Connection):
                 PRIMARY KEY (date_str, app_id, category)
             ) WITHOUT ROWID
             """)
-            conn.execute(f"""
-            CREATE TRIGGER IF NOT EXISTS trg_rollup_insert AFTER INSERT ON activity_log BEGIN
-                {_rollup_add_sql('+', 'NEW')}
-            END
-            """)
-            conn.execute(f"""
-            CREATE TRIGGER IF NOT EXISTS trg_rollup_update
-            AFTER UPDATE OF date_str, app_id, category, duration_seconds, keystrokes, clicks, scrolls ON activity_log
-            BEGIN
-                {_rollup_add_sql('-', 'OLD')}
-                {_rollup_add_sql('+', 'NEW')}
-                {_ROLLUP_PRUNE_OLD_SQL}
-            END
-            """)
-            conn.execute(f"""
-            CREATE TRIGGER IF NOT EXISTS trg_rollup_delete AFTER DELETE ON activity_log BEGIN
-                {_rollup_add_sql('-', 'OLD')}
-                {_ROLLUP_PRUNE_OLD_SQL}
-            END
-            """)
+            _create_rollup_triggers(conn)
             conn.execute("DELETE FROM daily_app_totals")
             conn.execute("""
             INSERT INTO daily_app_totals (date_str, app_id, category, duration_seconds, keystrokes, clicks, scrolls)
@@ -164,11 +201,37 @@ def _init_daily_rollup(conn: sqlite3.Connection):
             GROUP BY date_str, app_id, category
             HAVING SUM(duration_seconds) != 0 OR SUM(keystrokes) != 0 OR SUM(clicks) != 0 OR SUM(scrolls) != 0
             """)
-            conn.execute(f"PRAGMA user_version = {ROLLUP_SCHEMA_VERSION}")
+        if version < 2:
+            table_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'activity_log'"
+            ).fetchone()[0]
+            if "WITHOUT ROWID" not in table_sql.upper():
+                conn.execute(ACTIVITY_LOG_DDL.format(name="activity_log_v2"))
+                # The new table has no triggers yet, so the copy leaves daily_app_totals untouched
+                conn.execute(
+                    f"INSERT INTO activity_log_v2 ({ACTIVITY_LOG_COLUMNS}) "
+                    f"SELECT {ACTIVITY_LOG_COLUMNS} FROM activity_log"
+                )
+                conn.execute("DROP TABLE activity_log")  # also drops its indexes and triggers
+                conn.execute("ALTER TABLE activity_log_v2 RENAME TO activity_log")
+                _create_rollup_triggers(conn)
+                rebuilt = True
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         conn.commit()
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.execute("PRAGMA busy_timeout = 5000")
+    return rebuilt
+
+def _compact_file(conn: sqlite3.Connection):
+    """Returns freed pages to the filesystem and turns on incremental auto-vacuum."""
+    try:
+        conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
+        conn.execute("VACUUM")
+    except sqlite3.OperationalError:
+        pass  # busy right now: vacuum_and_cleanup_db retries during hourly maintenance
 
 def init_db(force: bool = False):
     global _db_initialized
@@ -184,37 +247,20 @@ def init_db(force: bool = False):
 
     with get_db() as conn:
         cursor = conn.cursor()
+        # Only takes effect on a brand-new file; existing ones switch during their next VACUUM
+        cursor.execute("PRAGMA auto_vacuum = INCREMENTAL;")
         cursor.execute("PRAGMA journal_mode = WAL;")
         cursor.execute("PRAGMA synchronous = NORMAL;")
         cursor.execute("PRAGMA wal_autocheckpoint = 1000;")
 
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS activity_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            date_str TEXT NOT NULL,
-            hour_int INTEGER NOT NULL,
-            app_id TEXT NOT NULL,
-            app_name TEXT NOT NULL,
-            window_title TEXT NOT NULL DEFAULT '',
-            category TEXT NOT NULL,
-            duration_seconds INTEGER NOT NULL DEFAULT 0,
-            keystrokes INTEGER NOT NULL DEFAULT 0,
-            clicks INTEGER NOT NULL DEFAULT 0,
-            scrolls INTEGER NOT NULL DEFAULT 0,
-            UNIQUE(date_str, hour_int, app_id, window_title)
-        )
-        """)
-        
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_activity_date ON activity_log(date_str)")
-        # Unused by any query (app_id is the prefix of idx_act_app_date_dur; nothing filters
-        # on category); they only add write cost on every 5s flush.
-        cursor.execute("DROP INDEX IF EXISTS idx_activity_app")
-        cursor.execute("DROP INDEX IF EXISTS idx_activity_category")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_act_app_date_dur ON activity_log(app_id, date_str, duration_seconds)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_act_date_dur ON activity_log(date_str, duration_seconds)")
-
-        _init_daily_rollup(conn)
+        cursor.execute(ACTIVITY_LOG_DDL.format(name="activity_log"))
+        if _migrate(conn):
+            _compact_file(conn)
+        # The compact layout needs no secondary indexes: the key order serves date ranges
+        # and the rollup serves per-app totals. Drop any an older version (re)created.
+        for index in ("idx_activity_date", "idx_activity_app", "idx_activity_category",
+                      "idx_act_app_date_dur", "idx_act_date_dur"):
+            cursor.execute(f"DROP INDEX IF EXISTS {index}")
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS custom_app_rules (
@@ -653,8 +699,7 @@ def record_activity_chunk(
             clicks = clicks + excluded.clicks,
             scrolls = scrolls + excluded.scrolls,
             app_name = excluded.app_name,
-            category = excluded.category,
-            timestamp = CURRENT_TIMESTAMP
+            category = excluded.category
         """, (
             date_str, hour_int, app_id, app_name, window_title,
             category, duration_seconds, keystrokes, clicks, scrolls
@@ -1147,6 +1192,12 @@ def vacuum_and_cleanup_db():
         try:
             cursor.execute("PRAGMA wal_checkpoint(PASSIVE);")
             cursor.execute("PRAGMA optimize;")
+            # Give freed pages back to the filesystem (no-op until auto_vacuum is INCREMENTAL)
+            cursor.execute("PRAGMA incremental_vacuum;").fetchall()
+            free_pages = cursor.execute("PRAGMA freelist_count;").fetchone()[0]
+            total_pages = cursor.execute("PRAGMA page_count;").fetchone()[0]
+            if free_pages > 1000 and free_pages > total_pages * 0.2:
+                _compact_file(conn)  # e.g. the post-migration VACUUM was busy and skipped
         except Exception:
             pass
 
@@ -1488,7 +1539,7 @@ def export_data_to_json(file_path: str):
     init_db()
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute(f"SELECT * FROM activity_log WHERE LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL} ORDER BY id ASC")
+        cursor.execute(f"SELECT * FROM activity_log WHERE LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL} ORDER BY date_str, hour_int, app_id, window_title")
         logs = [dict(r) for r in cursor.fetchall()]
 
         cursor.execute("SELECT key_code, SUM(count) as count FROM key_heatmap_v2 GROUP BY key_code")

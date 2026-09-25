@@ -1184,6 +1184,98 @@ class TestDailyRollup(unittest.TestCase):
         self._assert_rollup_exact()
         self.assertEqual(db.get_stats_by_range("week")["total_duration"], 120)
 
+class TestCompactStorageMigration(unittest.TestCase):
+    # The activity_log layout every install had before schema v2
+    OLD_DDL = """
+    CREATE TABLE activity_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        date_str TEXT NOT NULL, hour_int INTEGER NOT NULL, app_id TEXT NOT NULL, app_name TEXT NOT NULL,
+        window_title TEXT NOT NULL DEFAULT '', category TEXT NOT NULL,
+        duration_seconds INTEGER NOT NULL DEFAULT 0, keystrokes INTEGER NOT NULL DEFAULT 0,
+        clicks INTEGER NOT NULL DEFAULT 0, scrolls INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(date_str, hour_int, app_id, window_title)
+    );
+    CREATE INDEX idx_activity_date ON activity_log(date_str);
+    CREATE INDEX idx_act_app_date_dur ON activity_log(app_id, date_str, duration_seconds);
+    CREATE INDEX idx_act_date_dur ON activity_log(date_str, duration_seconds);
+    """
+    # The exact write a daemon started before the upgrade keeps issuing until restarted
+    OLD_DAEMON_UPSERT = """
+    INSERT INTO activity_log (date_str, hour_int, app_id, app_name, window_title, category,
+                              duration_seconds, keystrokes, clicks, scrolls)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(date_str, hour_int, app_id, window_title) DO UPDATE SET
+        duration_seconds = duration_seconds + excluded.duration_seconds,
+        keystrokes = keystrokes + excluded.keystrokes,
+        clicks = clicks + excluded.clicks,
+        scrolls = scrolls + excluded.scrolls,
+        app_name = excluded.app_name,
+        category = excluded.category,
+        timestamp = CURRENT_TIMESTAMP
+    """
+    ROWS = [
+        ("2026-01-05", 9, "code", "VS Code", "a.py", "Development", 300, 40, 3, 0),
+        ("2026-01-05", 9, "code", "VS Code", "b.py", "Development", 120, 10, 1, 2),
+        ("2026-01-06", 22, "steam", "Steam", "Game", "Gaming", 900, 0, 50, 0),
+        ("2025-03-01", 14, "brave-browser", "Brave", "Docs - Brave", "Browsing", 60, 5, 9, 30),
+    ]
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        orig = (db.DB_DIR, db.DB_PATH)
+        self.addCleanup(lambda: (setattr(db, "DB_DIR", orig[0]), setattr(db, "DB_PATH", orig[1])))
+        db.DB_DIR = Path(self.temp_dir.name)
+        db.DB_PATH = db.DB_DIR / "old.db"
+        conn = sqlite3.connect(db.DB_PATH)
+        conn.executescript(self.OLD_DDL)
+        conn.executemany("INSERT INTO activity_log (date_str, hour_int, app_id, app_name, window_title, category, "
+                         "duration_seconds, keystrokes, clicks, scrolls) VALUES (?,?,?,?,?,?,?,?,?,?)", self.ROWS)
+        conn.commit()
+        conn.close()
+
+    def _rows(self):
+        with db.get_db() as conn:
+            return sorted(tuple(r) for r in conn.execute(
+                "SELECT date_str, hour_int, app_id, app_name, window_title, category, "
+                "duration_seconds, keystrokes, clicks, scrolls FROM activity_log"))
+
+    def _layout(self):
+        with db.get_db() as conn:
+            sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'activity_log'").fetchone()[0]
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            indexes = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'activity_log'")]
+        return "WITHOUT ROWID" in sql, version, indexes
+
+    def test_upgrade_keeps_every_row_and_old_daemon_can_still_write(self):
+        db.init_db(force=True)
+        self.assertEqual(self._layout(), (True, 2, []))
+        self.assertEqual(self._rows(), sorted(self.ROWS))
+        self.assertEqual(db.get_stats_by_range("all_time")["total_duration"], 1380)
+
+        with db.get_db() as conn:
+            conn.execute(self.OLD_DAEMON_UPSERT, self.ROWS[0])   # conflict: updates in place
+            conn.execute(self.OLD_DAEMON_UPSERT, ("2026-01-07", 8, "code", "VS Code", "c.py", "Development", 5, 0, 0, 0))
+            conn.commit()
+        self.assertEqual(len(self._rows()), 5)
+        self.assertEqual(db.get_app_detail_stats("code", "all_time")["total_duration"], 300 * 2 + 120 + 5)
+        rollup = TestDailyRollup._assert_rollup_exact
+        rollup(self)
+
+    def test_failed_migration_leaves_the_old_database_untouched(self):
+        with unittest.mock.patch.object(db, "_create_rollup_triggers", side_effect=[None, RuntimeError("disk full")]):
+            with self.assertRaises(RuntimeError):
+                db.init_db(force=True)
+        with db.get_db() as conn:
+            sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'activity_log'").fetchone()[0]
+            self.assertIn("AUTOINCREMENT", sql)                  # still the old layout
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 0)
+        self.assertEqual(self._rows(), sorted(self.ROWS))
+        db.init_db(force=True)                                   # next start completes it
+        self.assertEqual(self._layout(), (True, 2, []))
+        self.assertEqual(self._rows(), sorted(self.ROWS))
+
 class TestDaemonDetection(unittest.TestCase):
     def test_stale_pid_file_with_recycled_pid(self):
         from qhealth_core import desktop_app
