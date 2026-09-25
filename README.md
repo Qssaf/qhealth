@@ -136,6 +136,7 @@ Log out and back in for it to take effect. Without it nothing is recorded, and Q
    systemctl --user daemon-reload
    systemctl --user enable --now qhealth
    ```
+   After pulling updates, restart it so the daemon runs the new code: `systemctl --user restart qhealth`. Database upgrades happen automatically on the next start, and all history is kept.
    With the service running, the GUI is a viewer: closing it (X or Esc) exits completely. Without the service, the GUI does the tracking itself, so closing it keeps it running in the tray (it tells you so); use **Quit** in the tray menu to stop.
 
 4. **Add the Plasma 6 panel widget (optional):**
