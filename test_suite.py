@@ -1184,6 +1184,62 @@ class TestDailyRollup(unittest.TestCase):
         self._assert_rollup_exact()
         self.assertEqual(db.get_stats_by_range("week")["total_duration"], 120)
 
+class TestReadCache(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        orig = (db.DB_DIR, db.DB_PATH)
+        self.addCleanup(lambda: (setattr(db, "DB_DIR", orig[0]), setattr(db, "DB_PATH", orig[1])))
+        db.DB_DIR = Path(self.temp_dir.name)
+        db.DB_PATH = db.DB_DIR / "cache.db"
+        db.init_db(force=True)
+        db.record_activity_chunk("code", "VS Code", "a.py", 60, 1, 1, 0, "Development")
+
+    def test_repeat_reads_are_served_from_cache(self):
+        db.get_stats_by_range("week")
+        with unittest.mock.patch.object(db, "get_all_app_budgets", side_effect=AssertionError("recomputed")):
+            self.assertEqual(db.get_stats_by_range("week")["total_duration"], 60)
+
+    def test_commit_from_another_process_invalidates(self):
+        self.assertEqual(db.get_stats_by_range("day")["total_duration"], 60)
+        other = sqlite3.connect(db.DB_PATH)  # e.g. the daemon
+        other.execute("INSERT INTO activity_log (date_str, hour_int, app_id, app_name, window_title, category, duration_seconds) "
+                      "VALUES (?, 3, 'steam', 'Steam', 'x', 'Gaming', 40)", (datetime.date.today().isoformat(),))
+        other.commit()
+        other.close()
+        self.assertEqual(db.get_stats_by_range("day")["total_duration"], 100)
+
+    def test_own_writes_and_other_threads_invalidate(self):
+        import threading
+        self.assertEqual(db.get_setting("paused", "false"), "false")
+        db.set_setting("paused", "true")                          # same thread, same connection
+        self.assertEqual(db.get_setting("paused", "false"), "true")
+        worker = threading.Thread(target=db.set_setting, args=("paused", "false"))  # its own connection
+        worker.start()
+        worker.join()
+        self.assertEqual(db.get_setting("paused", "false"), "false")
+
+    def test_midnight_and_mutation_safety(self):
+        first = db.get_stats_by_range("day")
+        first["apps"].clear()                                     # callers get their own copy
+        self.assertEqual(len(db.get_stats_by_range("day")["apps"]), 1)
+        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+        class Tomorrow(datetime.date):
+            @classmethod
+            def today(cls):
+                return tomorrow
+        with unittest.mock.patch("qhealth_core.db.datetime.date", Tomorrow):
+            self.assertEqual(db.get_stats_by_range("day")["total_duration"], 0)  # a new "today"
+
+    def test_failed_write_is_rolled_back_on_the_kept_connection(self):
+        with self.assertRaises(RuntimeError):
+            with db.get_db() as conn:
+                conn.execute("INSERT INTO app_settings (key, value) VALUES ('half', 'written')")
+                raise RuntimeError("crash before commit")
+        with db.get_db() as conn:
+            self.assertFalse(conn.in_transaction)
+        self.assertEqual(db.get_setting("half", "missing"), "missing")
+
 class TestCompactStorageMigration(unittest.TestCase):
     # The activity_log layout every install had before schema v2
     OLD_DDL = """

@@ -1,5 +1,8 @@
 import os
 import re
+import copy
+import functools
+import threading
 import urllib.parse
 import sqlite3
 import datetime
@@ -50,20 +53,59 @@ RE_LEAD_CHARS = re.compile(r"^[•\*\s\-_]+")
 RE_GH_REPO = re.compile(r"^([a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+)(?::\s*(.*))?$")
 RE_DOMAIN = re.compile(r"\b([a-zA-Z0-9-]+\.(?:com|org|net|io|dev|app|ai|me|cc|gg|tv|so|co|edu|gov|xyz|info))\b", re.IGNORECASE)
 
-@contextmanager
-def get_db():
+# One connection per thread, opened on first use and kept: opening one (plus its PRAGMAs)
+# cost more than most of the queries run on it. Also holds that thread's read cache.
+_local = threading.local()
+
+def _connect() -> sqlite3.Connection:
     DB_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)  # busy timeout 5 s
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 5000;")
     conn.execute("PRAGMA synchronous = NORMAL;")
-    conn.execute("PRAGMA cache_size = -16000;")
+    # Small page cache: reads go through mmap, and the daemon keeps this connection open
+    conn.execute("PRAGMA cache_size = -2000;")
     conn.execute("PRAGMA mmap_size = 67108864;")
     conn.execute("PRAGMA temp_store = MEMORY;")
+    return conn
+
+@contextmanager
+def get_db():
+    conn = getattr(_local, "conn", None)
+    if conn is None or _local.path != DB_PATH:
+        if conn is not None:
+            conn.close()
+        conn = _connect()
+        _local.conn, _local.path, _local.depth, _local.cache = conn, DB_PATH, 0, {}
+    _local.depth += 1
     try:
         yield conn
     finally:
-        conn.close()
+        _local.depth -= 1
+        # Closing the connection used to discard anything left uncommitted after an error;
+        # do the same when the outermost user is done, so a stale write never lingers
+        if _local.depth == 0 and conn.in_transaction:
+            conn.rollback()
+
+def _cached_read(fn):
+    """
+    Remembers a read's result on this thread until the database changes. PRAGMA
+    data_version moves when any other connection commits (the daemon, another thread);
+    total_changes moves when this connection writes. Today's date is part of the key
+    because "today" results roll over at midnight. Callers get a copy, so they may mutate it.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with get_db() as conn:
+            state = (conn.execute("PRAGMA data_version").fetchone()[0], conn.total_changes, datetime.date.today())
+            cache = _local.cache
+            if cache.get("__state__") != state or len(cache) > 256:
+                cache.clear()
+                cache["__state__"] = state
+            key = (fn.__name__, args, tuple(sorted(kwargs.items())))
+            if key not in cache:
+                cache[key] = fn(*args, **kwargs)
+            return copy.deepcopy(cache[key])
+    return wrapper
 
 def get_category_for_app(app_id: str, app_name: str) -> str:
     app_lower = (app_id or "").lower()
@@ -343,6 +385,7 @@ def set_app_budget(app_id: str, daily_limit_minutes: int, enabled: bool = True, 
         """, (cleaned_id, daily_limit_minutes, 1 if enabled else 0, 1 if block_on_exceed else 0))
         conn.commit()
 
+@_cached_read
 def get_app_budget(app_id: str) -> Optional[Dict[str, Any]]:
     init_db()
     cleaned_id = app_id.lower().strip()
@@ -352,6 +395,7 @@ def get_app_budget(app_id: str) -> Optional[Dict[str, Any]]:
         row = cursor.fetchone()
         return dict(row) if row else None
 
+@_cached_read
 def get_all_app_budgets() -> Dict[str, Dict[str, Any]]:
     init_db()
     with get_db() as conn:
@@ -371,6 +415,7 @@ def extend_app_budget(app_id: str, minutes: int, date_str: Optional[str] = None)
         """, (date_str, app_id.lower().strip(), int(minutes)))
         conn.commit()
 
+@_cached_read
 def get_budget_extensions(date_str: Optional[str] = None) -> Dict[str, int]:
     init_db()
     if not date_str:
@@ -379,6 +424,7 @@ def get_budget_extensions(date_str: Optional[str] = None) -> Dict[str, int]:
         rows = conn.execute("SELECT app_id, extra_minutes FROM budget_extensions WHERE date_str = ?", (date_str,)).fetchall()
     return {r["app_id"]: r["extra_minutes"] for r in rows}
 
+@_cached_read
 def get_budget_usage(date_str: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
     """Every enabled budget with its usage and effective limit (limit + extensions) for date_str."""
     init_db()
@@ -420,6 +466,7 @@ def get_exceeded_app_budgets(date_str: Optional[str] = None) -> Dict[str, Dict[s
         if info["used_seconds"] >= info["effective_limit_minutes"] * 60
     }
 
+@_cached_read
 def get_activity_streak_stats() -> Dict[str, Any]:
     init_db()
     today = datetime.date.today()
@@ -489,6 +536,7 @@ def get_activity_streak_stats() -> Dict[str, Any]:
         "milestones": milestones
     }
 
+@_cached_read
 def get_setting(key: str, default: str = "") -> str:
     init_db()
     with get_db() as conn:
@@ -528,6 +576,7 @@ def set_custom_app_rule(app_id: str, category: str, display_name: Optional[str] 
         conn.commit()
     app_resolver.clear_cache()
 
+@_cached_read
 def get_custom_app_rules() -> Dict[str, Dict[str, Any]]:
     init_db()
     with get_db() as conn:
@@ -580,6 +629,7 @@ def record_input_heatmap_chunk(key_counts: Dict[int, int], mouse_counts: Dict[st
 
         conn.commit()
 
+@_cached_read
 def get_keyboard_heatmap_data(range_type: str = "day", target_date: Optional[str] = None) -> Dict[int, int]:
     init_db()
     today = datetime.date.today()
@@ -623,6 +673,7 @@ def get_keyboard_heatmap_data(range_type: str = "day", target_date: Optional[str
         """, params)
         return {row["key_code"]: row["total_count"] for row in cursor.fetchall()}
 
+@_cached_read
 def get_mouse_heatmap_data(range_type: str = "day", target_date: Optional[str] = None) -> Dict[str, int]:
     init_db()
     today = datetime.date.today()
@@ -706,6 +757,7 @@ def record_activity_chunk(
         ))
         conn.commit()
 
+@_cached_read
 def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = None) -> Dict[str, Any]:
     init_db()
     today = datetime.date.today()
@@ -925,6 +977,7 @@ def _month_or_year_timeline(month_map: Dict[str, Dict[str, Any]], anchor_date: d
         for y in range(first_year, last_year + 1)
     ]
 
+@_cached_read
 def get_activity_heatmap_data(days: int = 70, target_date: Optional[str] = None) -> List[Dict[str, Any]]:
     """The `days` days ending on target_date (defaults to today)."""
     init_db()
@@ -1205,6 +1258,7 @@ def clean_window_title(app_id: str, raw_title: str) -> str:
     res = parse_window_title_info(app_id, raw_title)
     return res[0]
 
+@_cached_read
 def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Optional[str] = None) -> Dict[str, Any]:
     """
     Returns specific drilldown metrics, range-adjusted timeline, and detailed per-page/website/channel breakdown.
@@ -1419,6 +1473,7 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
 
     return summary
 
+@_cached_read
 def get_month_activity_map(year: int, month: int) -> Dict[str, Dict[str, Any]]:
     init_db()
     prefix = f"{year:04d}-{month:02d}%"
