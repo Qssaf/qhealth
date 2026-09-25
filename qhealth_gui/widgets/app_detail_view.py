@@ -12,7 +12,7 @@ RANGE_LABELS = {
     "day": "TODAY",
     "week": "LAST 7 DAYS",
     "month": "LAST 30 DAYS",
-    "year": "THIS YEAR",
+    "year": "LAST 12 MONTHS",
     "all_time": "ALL TIME"
 }
 
@@ -21,7 +21,7 @@ TREND_TITLES = {
     "week": "7-DAY USAGE TREND",
     "month": "30-DAY USAGE TREND",
     "year": "MONTHLY USAGE DISTRIBUTION",
-    "all_time": "ALL-TIME MONTHLY TREND"
+    "all_time": "ALL-TIME USAGE TREND"
 }
 
 EXTENSION_MINUTES = 15

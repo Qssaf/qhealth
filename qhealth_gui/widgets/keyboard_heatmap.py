@@ -179,7 +179,7 @@ class KeyboardHeatmapWidget(QFrame):
             "day": "Day's key frequency",
             "week": "Last 7 days key frequency",
             "month": "Last 30 days key frequency",
-            "year": "This year's key frequency",
+            "year": "Last 12 months' key frequency",
             "all_time": "Lifetime key frequency"
         }
         self.sub_lbl.setText(sub_map.get(range_type, "Key frequency"))

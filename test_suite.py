@@ -167,6 +167,29 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual((empty["focus_score"], empty["focus_rating"]), (0, "No Activity"))
         self.assertEqual(db.get_stats_by_range("day")["focus_rating"], "Deep Work")
 
+    def test_all_time_chart_covers_whole_history(self):
+        today = datetime.date.today()
+        db.record_activity_chunk("code", "VS Code", "now", 60, 1, 1, 0, "Development")
+        # Short history: 12 monthly bars, same as the Year view
+        short = db.get_stats_by_range("all_time")["timeline"]
+        self.assertEqual(len(short), 12)
+        self.assertEqual(short[-1]["month_str"], today.strftime("%Y-%m"))
+
+        # History older than 12 months: one bar per year, and the bars add up to the total
+        old_day = today.replace(year=today.year - 3, day=1).strftime("%Y-%m-%d")
+        db.record_activity_chunk("code", "VS Code", "old", 90, 1, 1, 0, "Development")
+        with db.get_db() as conn:
+            conn.execute("UPDATE activity_log SET date_str = ? WHERE window_title = 'old'", (old_day,))
+            conn.commit()
+        for stats in (db.get_stats_by_range("all_time"), db.get_app_detail_stats("code", "all_time")):
+            timeline = stats["timeline"]
+            self.assertEqual([t["label"] for t in timeline], [str(y) for y in range(today.year - 3, today.year + 1)])
+            total = stats["total_duration"]
+            self.assertEqual(sum(t["duration"] for t in timeline), total)
+            self.assertEqual(total, 150)
+        # The Year view keeps its 12 rolling months
+        self.assertEqual(len(db.get_stats_by_range("year")["timeline"]), 12)
+
     def test_app_detail_matches_leaderboard_totals(self):
         db.record_activity_chunk("reader", "Reader", "book", 300, 10, 2, 0, "Productivity")
         # A different app whose recorded display name happens to equal "reader"
@@ -519,10 +542,14 @@ class TestGUIWidgets(unittest.TestCase):
         self.assertEqual(radial.tag_lbl.text(), "Jan 05, 2026")
         radial.update_data(60, [], "week", "2026-01-05")
         self.assertEqual(radial.tag_lbl.text(), "Last 7 Days to Jan 05, 2026")
+        radial.update_data(60, [], "year", "")
+        self.assertEqual(radial.tag_lbl.text(), "Last 12 Months")  # rolling 365 days, not the calendar year
 
         timeline = self.HourlyTimelineWidget()
         timeline.update_data([{"hour_int": 0, "duration": 5}], "day", is_today=False)
         self.assertFalse(timeline.painter_widget.is_today)
+        timeline.update_data([{"month_str": "2024", "label": "2024", "duration": 60}], "all_time")
+        timeline.grab()  # yearly bars paint through the generic branch
 
         app_row = {"app_id": "steam", "app_name": "Steam", "duration": 7200, "percentage": 100.0,
                    "budget_minutes": 60, "budget_percentage": 100.0, "block_on_exceed": True}

@@ -169,7 +169,7 @@ class RadialChartWidget(QFrame):
             "day": "Today",
             "week": "Last 7 Days",
             "month": "Last 30 Days",
-            "year": "This Year",
+            "year": "Last 12 Months",
             "all_time": "All Time"
         }
         tag = range_tags.get(range_type, "Custom")

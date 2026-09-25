@@ -9,8 +9,8 @@ RANGE_TITLES = {
     "day": ("24-HOUR ACTIVITY TIMELINE", "Hourly active time distribution"),
     "week": ("7-DAY ACTIVITY BREAKDOWN", "Daily screen time across past 7 days"),
     "month": ("30-DAY ACTIVITY BREAKDOWN", "Daily screen time across past 30 days"),
-    "year": ("MONTHLY ACTIVITY DISTRIBUTION", "Monthly breakdown for this year"),
-    "all_time": ("ALL-TIME MONTHLY DISTRIBUTION", "Historical monthly activity")
+    "year": ("MONTHLY ACTIVITY DISTRIBUTION", "Monthly breakdown for the last 12 months"),
+    "all_time": ("ALL-TIME ACTIVITY DISTRIBUTION", "By month, or by year once history spans more than 12 months")
 }
 
 class TimelineBarsPainter(QWidget):

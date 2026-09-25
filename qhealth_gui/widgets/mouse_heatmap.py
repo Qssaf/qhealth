@@ -162,7 +162,7 @@ class MouseHeatmapWidget(QFrame):
             "day": "Day's clicks",
             "week": "Last 7 days clicks",
             "month": "Last 30 days clicks",
-            "year": "This year's clicks",
+            "year": "Last 12 months' clicks",
             "all_time": "Lifetime clicks"
         }
         self.sub_lbl.setText(sub_map.get(range_type, "Clicks"))

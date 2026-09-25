@@ -803,26 +803,7 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
                     "clicks": entry["clicks"]
                 })
         else:
-            # 12-Month slots for Year and All-Time
-            timeline = []
-            cur_year = anchor_date.year
-            cur_month = anchor_date.month
-            for i in range(11, -1, -1):
-                m_offset = cur_month - i
-                y = cur_year
-                while m_offset <= 0:
-                    m_offset += 12
-                    y -= 1
-                m_str = f"{y:04d}-{m_offset:02d}"
-                d_sample = datetime.date(y, m_offset, 1)
-                entry = bucket_map.get(m_str, empty_slot)
-                timeline.append({
-                    "month_str": m_str,
-                    "label": d_sample.strftime("%b"),
-                    "duration": entry["duration"],
-                    "keystrokes": entry["keystrokes"],
-                    "clicks": entry["clicks"]
-                })
+            timeline = _month_or_year_timeline(bucket_map, anchor_date, range_type)
 
         # Calculate Focus & Productivity Score (0-100%)
         productive_cats = {"Development", "Productivity", "Media & Design"}
@@ -857,6 +838,46 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
         "categories": categories,
         "timeline": timeline
     }
+
+def _month_or_year_timeline(month_map: Dict[str, Dict[str, Any]], anchor_date: datetime.date, range_type: str) -> List[Dict[str, Any]]:
+    """
+    Twelve monthly slots ending at anchor_date's month (Year view, and All Time while all
+    history fits in them). All Time switches to one slot per year as soon as any recorded
+    month falls outside that window, so the chart covers everything its totals include.
+    """
+    metrics = ("duration", "keystrokes", "clicks")
+    empty = dict.fromkeys(metrics, 0)
+    timeline = []
+    for i in range(11, -1, -1):
+        m_offset = anchor_date.month - i
+        y = anchor_date.year
+        while m_offset <= 0:
+            m_offset += 12
+            y -= 1
+        m_str = f"{y:04d}-{m_offset:02d}"
+        entry = month_map.get(m_str, empty)
+        timeline.append({
+            "month_str": m_str,
+            "label": datetime.date(y, m_offset, 1).strftime("%b"),
+            **{k: entry[k] for k in metrics}
+        })
+
+    recorded = [m for m, e in month_map.items() if m and any(e[k] for k in metrics)]
+    first_slot, last_slot = timeline[0]["month_str"], timeline[-1]["month_str"]
+    if range_type != "all_time" or not recorded or (min(recorded) >= first_slot and max(recorded) <= last_slot):
+        return timeline
+
+    years: Dict[str, Dict[str, int]] = {}
+    for m_str, entry in month_map.items():
+        year = years.setdefault(m_str[:4], dict(empty))
+        for k in metrics:
+            year[k] += entry[k]
+    first_year = int(min(recorded)[:4])
+    last_year = max(anchor_date.year, int(max(recorded)[:4]))
+    return [
+        {"month_str": str(y), "label": str(y), **years.get(str(y), empty)}
+        for y in range(first_year, last_year + 1)
+    ]
 
 def get_activity_heatmap_data(days: int = 70, target_date: Optional[str] = None) -> List[Dict[str, Any]]:
     """The `days` days ending on target_date (defaults to today)."""
@@ -1258,25 +1279,7 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
             ORDER BY month_str ASC
             """, [app_id] + params)
             month_map = {r["month_str"]: dict(r) for r in cursor.fetchall()}
-            timeline = []
-            cur_year = anchor_date.year
-            cur_month = anchor_date.month
-            for i in range(11, -1, -1):
-                m_offset = cur_month - i
-                y = cur_year
-                while m_offset <= 0:
-                    m_offset += 12
-                    y -= 1
-                m_str = f"{y:04d}-{m_offset:02d}"
-                d_sample = datetime.date(y, m_offset, 1)
-                entry = month_map.get(m_str, {"duration": 0, "keystrokes": 0, "clicks": 0})
-                timeline.append({
-                    "month_str": m_str,
-                    "label": d_sample.strftime("%b"),
-                    "duration": entry["duration"],
-                    "keystrokes": entry["keystrokes"],
-                    "clicks": entry["clicks"]
-                })
+            timeline = _month_or_year_timeline(month_map, anchor_date, range_type)
 
         # 3. Per-page / website / channel breakdown
         cursor.execute(f"""
