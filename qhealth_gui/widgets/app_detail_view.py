@@ -1,4 +1,4 @@
-from typing import Dict, Any, Callable, List, Optional
+from typing import Dict, Any, Callable, List
 from datetime import datetime
 from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtWidgets import (

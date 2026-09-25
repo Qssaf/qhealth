@@ -4,7 +4,7 @@ import select
 import signal
 import subprocess
 from pathlib import Path
-from typing import Set, List, Optional, Dict, Any
+from typing import Set, List, Optional, Dict
 
 # System-critical apps and desktop components that must NEVER be killed
 IMMUNE_APP_IDS: Set[str] = {

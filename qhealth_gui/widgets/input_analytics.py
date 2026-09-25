@@ -1,10 +1,10 @@
 from typing import List, Dict, Any
-from PyQt6.QtCore import Qt, QRectF, QPoint
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QStackedWidget, QToolTip, QSizePolicy
 )
 from PyQt6.QtGui import QPainter, QColor, QFont, QBrush, QLinearGradient
-from ..utils import format_number, format_duration
+from ..utils import format_number
 from .heatmap_grid import HeatmapGridWidget
 from .keyboard_heatmap import KeyboardHeatmapWidget
 from .mouse_heatmap import MouseHeatmapWidget

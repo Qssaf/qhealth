@@ -2,17 +2,16 @@ import json
 import time
 import datetime
 from pathlib import Path
-from PyQt6.QtCore import Qt, QTimer, QDate
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QStackedWidget, QDateEdit, QFrame, QApplication, QSizePolicy
+    QPushButton, QStackedWidget, QFrame, QSizePolicy
 )
 from PyQt6.QtGui import QIcon, QKeySequence, QPixmap, QPainter, QColor, QShortcut
 
 from qhealth_core.db import (
     get_stats_by_range, get_activity_heatmap_data, get_app_detail_stats,
-    get_keyboard_heatmap_data, get_mouse_heatmap_data, toggle_pause_setting, is_paused_setting,
-    get_activity_streak_stats
+    get_keyboard_heatmap_data, get_mouse_heatmap_data, toggle_pause_setting, get_activity_streak_stats
 )
 
 from .styles import get_qhealth_stylesheet

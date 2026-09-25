@@ -1,5 +1,4 @@
 import os
-import sys
 import glob
 import time
 import json
@@ -187,7 +186,6 @@ class ActivityTracker:
         opened_fds = {}
         
         def refresh_devices():
-            nonlocal opened_fds
             current_paths = set(glob.glob("/dev/input/event*"))
             for path in list(opened_fds.keys()):
                 if path not in current_paths:
@@ -374,7 +372,6 @@ class ActivityTracker:
                 break
             time.sleep(2.0)
 
-        last_check = time.time()
         while self.running:
             proc = None
             try:
@@ -502,7 +499,7 @@ class ActivityTracker:
 
             if key_codes or mouse_btns:
                 record_input_heatmap_chunk(key_codes, mouse_btns)
-        except Exception as e:
+        except Exception:
             pass
 
     def _aggregator_loop(self):

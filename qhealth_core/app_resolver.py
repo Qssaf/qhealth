@@ -2,7 +2,7 @@ import os
 import glob
 import re
 import configparser
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 DESKTOP_DIRS = [
     os.path.expanduser("~/.local/share/applications"),

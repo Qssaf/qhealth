@@ -33,7 +33,7 @@ class QHealthDaemon:
             self._lock_file.write(str(os.getpid()))
             self._lock_file.flush()
         except (IOError, BlockingIOError):
-            print(f"[QHealth Daemon] Another daemon instance is already active. Exiting.")
+            print("[QHealth Daemon] Another daemon instance is already active. Exiting.")
             sys.exit(0)
 
         self.running = True

@@ -1,6 +1,5 @@
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QLabel
-from PyQt6.QtGui import QColor
 from ..utils import get_app_icon_pixmap
 
 class LivePulseWidget(QFrame):

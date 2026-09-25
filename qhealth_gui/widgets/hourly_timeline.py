@@ -1,8 +1,8 @@
 from typing import List, Dict, Any
 from datetime import datetime
-from PyQt6.QtCore import Qt, QRectF, QPoint
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolTip, QSizePolicy
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QLinearGradient
+from PyQt6.QtGui import QPainter, QColor, QBrush, QFont, QLinearGradient
 from ..utils import format_duration, format_number
 
 RANGE_TITLES = {

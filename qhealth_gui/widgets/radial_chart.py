@@ -1,9 +1,9 @@
 import math
 import datetime
 from typing import List, Dict, Any
-from PyQt6.QtCore import Qt, QRectF, QPoint
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QToolTip
-from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QBrush
+from PyQt6.QtGui import QPainter, QPen, QColor, QFont
 from ..utils import format_duration, format_number, get_app_color, get_app_icon_pixmap
 
 class RadialRingPainter(QWidget):

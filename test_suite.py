@@ -13,7 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from qhealth_core.app_resolver import app_resolver
 from qhealth_core import db
-from qhealth_gui.utils import format_duration, format_number, get_category_color, get_app_icon_pixmap
+from qhealth_gui.utils import get_category_color
 
 # Never touch the real ~/.local/share/qhealth database: every test (including ones that
 # only build an ActivityTracker or resolve apps) uses a throwaway DB by default.
@@ -22,7 +22,6 @@ db.DB_DIR = Path(_TEST_DB_DIR.name)
 db.DB_PATH = db.DB_DIR / "qhealth.db"
 
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt
 
 # Create Qt Application for headless widget testing
 app = QApplication.instance() or QApplication(sys.argv)
@@ -619,7 +618,7 @@ class TestGUIWidgets(unittest.TestCase):
 
 class TestBlocker(unittest.TestCase):
     def test_immunity_checks(self):
-        from qhealth_core.blocker import is_immune, is_process_running
+        from qhealth_core.blocker import is_immune
 
         # Critical desktop and editor components must be immune
         self.assertTrue(is_immune("qhealth"))
