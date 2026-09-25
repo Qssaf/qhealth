@@ -479,6 +479,15 @@ class TestGUIWidgets(unittest.TestCase):
         self.assertEqual(win.selected_date, d(1))
         win.close()
 
+    def test_live_card_explains_missing_input_access(self):
+        live = self.LivePulseWidget()
+        live.update_metrics({"active_app": "Desktop", "is_idle": True, "input_access_denied": True})
+        self.assertEqual(live.badge.text(), "NO INPUT ACCESS")
+        self.assertIn("usermod -aG input", live.badge.toolTip())
+        live.update_metrics({"active_app": "Desktop", "is_idle": True, "input_access_denied": False})
+        self.assertEqual(live.badge.text(), "IDLE / AFK")
+        self.assertEqual(live.badge.toolTip(), "")
+
     def test_past_date_labels_and_blocked_pill(self):
         from PyQt6.QtWidgets import QLabel
         radial = self.RadialChartWidget()
@@ -901,6 +910,43 @@ class TestFocusHookBlocking(unittest.TestCase):
         self._focus(tracker, "focusgame")
         self.assertEqual(mock_close.call_count, 1)
         self.assertEqual(tracker.current_raw_app, "focusgame")
+
+class TestInputAccessWarning(unittest.TestCase):
+    def test_detects_permission_denied_devices(self):
+        from qhealth_core.tracker import ActivityTracker
+        tracker = ActivityTracker()
+        paths = ["/dev/input/event0", "/dev/input/event1"]
+        fds = {}
+        with unittest.mock.patch("qhealth_core.tracker.glob.glob", return_value=paths), \
+             unittest.mock.patch("qhealth_core.tracker.os.open", side_effect=PermissionError):
+            tracker._refresh_input_devices(fds)
+        self.assertTrue(tracker.input_access_denied)
+        self.assertTrue(tracker.get_live_metrics()["input_access_denied"])
+
+        # After joining the input group the next rescan clears it
+        real_fd = os.open(os.devnull, os.O_RDONLY)
+        self.addCleanup(lambda: [os.close(fd) for fd in fds.values()])
+        with unittest.mock.patch("qhealth_core.tracker.glob.glob", return_value=paths[:1]), \
+             unittest.mock.patch("qhealth_core.tracker.os.open", return_value=real_fd):
+            tracker._refresh_input_devices(fds)
+        self.assertFalse(tracker.input_access_denied)
+
+        # No devices at all (VM, container) is not a permission problem
+        with unittest.mock.patch("qhealth_core.tracker.glob.glob", return_value=[]):
+            tracker._refresh_input_devices(fds)
+        self.assertFalse(tracker.input_access_denied)
+
+    @unittest.mock.patch("qhealth_core.daemon.send_notification")
+    def test_daemon_warns_once(self, notify):
+        from qhealth_core.daemon import QHealthDaemon
+        d = QHealthDaemon.__new__(QHealthDaemon)
+        d._warned_input_access = False
+        d.tracker = unittest.mock.Mock(input_access_denied=True)
+        with unittest.mock.patch("builtins.print"):
+            d._warn_if_no_input_access()
+            d._warn_if_no_input_access()
+        notify.assert_called_once()
+        self.assertIn("usermod -aG input", notify.call_args.args[1])
 
 class TestKWinScriptRecovery(unittest.TestCase):
     def _run(self, returncode, stdout):

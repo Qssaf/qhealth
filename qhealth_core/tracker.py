@@ -22,6 +22,11 @@ REL_WHEEL = 8
 REL_HWHEEL = 6
 
 IDLE_THRESHOLD_SECONDS = 60
+
+INPUT_ACCESS_HELP = (
+    "QHealth cannot read keyboard/mouse devices (/dev/input), so no activity is recorded. "
+    "Add yourself to the 'input' group: sudo usermod -aG input $USER, then log out and back in."
+)
 KWIN_CHECK_INTERVAL_TICKS = 12  # aggregator ticks (5s each) between KWin script health checks
 
 # Kept in the user's private data dir, not world-writable /tmp, so another local
@@ -63,6 +68,8 @@ class ActivityTracker:
         self.last_input_time = time.monotonic()
         self.last_flush_time = time.monotonic()
         self.is_idle = False
+        # True when /dev/input devices exist but none can be opened (user not in the 'input' group)
+        self.input_access_denied = False
         
         # Current chunk stats (to be flushed to DB)
         self.chunk_keystrokes = 0
@@ -178,29 +185,16 @@ class ActivityTracker:
             "live_cpm": live_cpm,
             "is_idle": idle_state,
             "is_paused": self.paused,
-            "seconds_since_input": int(now - self.last_input_time)
+            "seconds_since_input": int(now - self.last_input_time),
+            "input_access_denied": self.input_access_denied
         }
 
     def _input_loop(self):
         """Monitors all /dev/input/event* devices asynchronously."""
         opened_fds = {}
-        
+
         def refresh_devices():
-            current_paths = set(glob.glob("/dev/input/event*"))
-            for path in list(opened_fds.keys()):
-                if path not in current_paths:
-                    try:
-                        os.close(opened_fds[path])
-                    except:
-                        pass
-                    del opened_fds[path]
-            for path in current_paths:
-                if path not in opened_fds:
-                    try:
-                        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-                        opened_fds[path] = fd
-                    except Exception:
-                        pass
+            self._refresh_input_devices(opened_fds)
 
         refresh_devices()
         last_refresh = time.time()
@@ -274,6 +268,29 @@ class ActivityTracker:
                 os.close(fd)
             except:
                 pass
+
+    def _refresh_input_devices(self, opened_fds: Dict[str, int]):
+        """Opens newly attached /dev/input/event* devices and closes vanished ones."""
+        current_paths = set(glob.glob("/dev/input/event*"))
+        for path in list(opened_fds.keys()):
+            if path not in current_paths:
+                try:
+                    os.close(opened_fds[path])
+                except:
+                    pass
+                del opened_fds[path]
+        denied = 0
+        for path in current_paths:
+            if path not in opened_fds:
+                try:
+                    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+                    opened_fds[path] = fd
+                except PermissionError:
+                    denied += 1
+                except Exception:
+                    pass
+        # Without access every minute looks idle and nothing is recorded, so say why
+        self.input_access_denied = not opened_fds and denied > 0
 
     def _inject_kwin_script(self) -> bool:
         """Injects or reloads the active focus monitor in KWin."""

@@ -4,9 +4,9 @@ import time
 import signal
 import sys
 from pathlib import Path
-from .tracker import ActivityTracker
+from .tracker import ActivityTracker, INPUT_ACCESS_HELP
 from .db import init_db, is_paused_setting, get_stats_by_range, vacuum_and_cleanup_db, get_break_reminder_minutes
-from .wellbeing import BudgetEnforcer, BreakReminder
+from .wellbeing import BudgetEnforcer, BreakReminder, send_notification
 
 STATE_DIR = Path.home() / ".local" / "share" / "qhealth"
 STATE_FILE = STATE_DIR / "live_state.json"
@@ -16,6 +16,7 @@ class QHealthDaemon:
     def __init__(self):
         self.running = False
         self._lock_file = None
+        self._warned_input_access = False
         init_db()
         self.tracker = ActivityTracker()
         self.budget_enforcer = BudgetEnforcer(self.tracker)
@@ -62,6 +63,7 @@ class QHealthDaemon:
                         self.break_reminder.check(get_break_reminder_minutes())
                     except Exception:
                         pass
+                    self._warn_if_no_input_access()
 
                 if loop_count % 3600 == 0 and loop_count > 0:
                     try:
@@ -95,6 +97,13 @@ class QHealthDaemon:
                 time.sleep(1.0)
         finally:
             self.stop()
+
+    def _warn_if_no_input_access(self):
+        # Once per run: the journal gets the fix, the desktop gets a notification
+        if self.tracker.input_access_denied and not self._warned_input_access:
+            self._warned_input_access = True
+            print(f"[QHealth Daemon] WARNING: {INPUT_ACCESS_HELP}")
+            send_notification("QHealth — No Keyboard/Mouse Access", INPUT_ACCESS_HELP, urgency="critical")
 
     def _handle_signal(self, signum, frame):
         self.running = False

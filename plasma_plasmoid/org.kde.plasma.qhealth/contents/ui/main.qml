@@ -17,6 +17,7 @@ PlasmoidItem {
     property bool isIdle: false
     property bool isPaused: false
     property bool isOffline: false
+    property bool noInput: false
 
     // Qt 6 refuses XMLHttpRequest on local files (unless QML_XHR_ALLOW_FILE_READ=1, which
     // plasmashell doesn't set), so read the daemon's state file through the executable engine.
@@ -41,6 +42,7 @@ PlasmoidItem {
                 root.activeApp = state.active_app || "Desktop";
                 root.isIdle = state.is_idle || false;
                 root.isPaused = state.is_paused || false;
+                root.noInput = state.input_access_denied || false;
                 root.isOffline = false;
             } catch (e) {}
         }
@@ -87,10 +89,10 @@ PlasmoidItem {
             }
 
             PlasmaComponents3.Label {
-                text: root.isOffline ? "OFF" : (root.isPaused ? "PAUSED" : (root.isIdle ? "IDLE" : root.todayDuration))
+                text: root.isOffline ? "OFF" : (root.isPaused ? "PAUSED" : (root.noInput ? "NO INPUT" : (root.isIdle ? "IDLE" : root.todayDuration)))
                 font.bold: true
                 font.pixelSize: 12
-                color: root.isOffline ? "#64748b" : (root.isPaused ? "#fbbf24" : (root.isIdle ? "#94a3b8" : "#34d399"))
+                color: root.isOffline ? "#64748b" : (root.isPaused ? "#fbbf24" : (root.noInput ? "#f87171" : (root.isIdle ? "#94a3b8" : "#34d399")))
             }
 
             PlasmaComponents3.Label {
@@ -104,7 +106,9 @@ PlasmoidItem {
         PlasmaCore.ToolTipArea {
             anchors.fill: parent
             mainText: "QHealth — Screen Time"
-            subText: root.isOffline ? "Tracking daemon is not running.\n\nClick to open QHealth." : "Today: " + root.todayDuration + "\nActive: " + root.activeApp + (root.liveWpm > 0 ? "\nTyping: " + root.liveWpm + " WPM" : "") + "\n\nClick to open full QHealth dashboard."
+            subText: root.isOffline ? "Tracking daemon is not running.\n\nClick to open QHealth."
+                : root.noInput ? "Cannot read keyboard/mouse (/dev/input), so nothing is recorded.\nFix: sudo usermod -aG input $USER, then log out and back in."
+                : "Today: " + root.todayDuration + "\nActive: " + root.activeApp + (root.liveWpm > 0 ? "\nTyping: " + root.liveWpm + " WPM" : "") + "\n\nClick to open full QHealth dashboard."
         }
     }
 }
