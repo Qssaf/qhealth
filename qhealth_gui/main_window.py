@@ -79,7 +79,7 @@ class QHealthMainWindow(QMainWindow):
         self._today_str = self.selected_date
         self.on_close = None  # set by the app to decide between quitting and staying in the tray
         self._data_version = None   # DB file signature at the last refresh
-        self._last_streak_poll = 0.0  # streak only changes daily; re-query at most once a minute
+        self._last_streak_poll = None  # monotonic time of the last streak query; None = never
 
         apply_theme(QApplication.instance())
         self.setWindowTitle("QHealth")
@@ -520,7 +520,7 @@ class QHealthMainWindow(QMainWindow):
 
     def _refresh_streak(self):
         # Streak scans every day's totals; once a minute is plenty
-        if time.monotonic() - self._last_streak_poll < 60:
+        if self._last_streak_poll is not None and time.monotonic() - self._last_streak_poll < 60:
             return
         self._last_streak_poll = time.monotonic()
         try:

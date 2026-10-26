@@ -28,6 +28,7 @@ live_state.json
 build/
 dist/
 *.spec
+!packaging/windows/qhealth.spec
 *.egg-info/
 packaging/arch/src/
 packaging/arch/pkg/

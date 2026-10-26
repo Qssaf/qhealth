@@ -583,14 +583,14 @@ class TestGUIWidgets(unittest.TestCase):
         win.show()
         win.selected_date = "2020-01-01"
         win._switch_main_page(1)
-        win._last_streak_poll = 0.0
+        win._last_streak_poll = None
         with unittest.mock.patch.object(win, "_poll_db") as poll, \
              unittest.mock.patch("qhealth_gui.main_window.get_activity_streak_stats", return_value={"current_streak": 3}):
             win._on_db_timer()
             poll.assert_not_called()   # the Input page now anchors on the selected (past) date
         self.assertIn("3-day streak", win.streak_badge.text().lower())
         win.hide()
-        win._last_streak_poll = 0.0
+        win._last_streak_poll = None
         with unittest.mock.patch("qhealth_gui.main_window.get_activity_streak_stats") as streak:
             win._on_db_timer()         # hidden in the tray: no DB work at all
             streak.assert_not_called()
