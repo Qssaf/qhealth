@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
-import QtCore
 import org.kde.plasma.plasmoid
 import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.components as PlasmaComponents3
@@ -18,38 +17,44 @@ PlasmoidItem {
     property string activeApp: "Desktop"
     property bool isIdle: false
     property bool isPaused: false
+    property bool isOffline: false
+    property bool noInput: false
 
-    function refreshStats() {
-        var doc = new XMLHttpRequest();
-        doc.onreadystatechange = function() {
-            if (doc.readyState === XMLHttpRequest.DONE) {
-                if (doc.status === 200 || doc.status === 0) {
-                    try {
-                        var data = JSON.parse(doc.responseText);
-                        root.todayDuration = data.today_duration_formatted || "0m";
-                        root.liveWpm = data.live_wpm || 0;
-                        root.activeApp = data.active_app || "Desktop";
-                        root.isIdle = data.is_idle || false;
-                        root.isPaused = data.is_paused || false;
-                    } catch (e) {}
-                }
-            }
-        };
-        var dataPath = StandardPaths.writableLocation(StandardPaths.GenericDataLocation);
-        var url = "file://" + dataPath + "/qhealth/live_state.json";
-        doc.open("GET", url);
-        doc.send();
-    }
-
-    // Runs `qhealth` whether it is installed system-wide or per user (~/.local/bin may not be on plasmashell's PATH)
+    // Qt 6 refuses XMLHttpRequest on local files (unless QML_XHR_ALLOW_FILE_READ=1, which
+    // plasmashell doesn't set), so read the daemon's state file through the executable engine.
     P5Support.DataSource {
-        id: launcher
+        id: shell
         engine: "executable"
         connectedSources: []
-        onNewData: (sourceName, data) => launcher.disconnectSource(sourceName)
-        function open() {
-            connectSource("sh -c 'command -v qhealth >/dev/null && exec qhealth || exec \"$HOME/.local/bin/qhealth\"'")
+        onNewData: (sourceName, data) => {
+            disconnectSource(sourceName);
+            if (sourceName !== root.stateCommand) {
+                return;
+            }
+            if (data["exit code"] !== 0) {
+                // File missing (clean shutdown) or older than 10s (daemon crashed or was killed)
+                root.isOffline = true;
+                return;
+            }
+            try {
+                var state = JSON.parse(data["stdout"]);
+                root.todayDuration = state.today_duration_formatted || "0m";
+                root.liveWpm = state.live_wpm || 0;
+                root.activeApp = state.active_app || "Desktop";
+                root.isIdle = state.is_idle || false;
+                root.isPaused = state.is_paused || false;
+                root.noInput = state.input_access_denied || false;
+                root.isOffline = false;
+            } catch (e) {}
         }
+    }
+
+    // The daemon rewrites the file on change and at least every 5s, so a file older than 10s is stale
+    readonly property string stateCommand: "f=\"$HOME/.local/share/qhealth/live_state.json\"; "
+        + "[ $(( $(date +%s) - $(stat -c %Y \"$f\") )) -lt 10 ] && cat \"$f\""
+
+    function refreshStats() {
+        shell.connectSource(root.stateCommand);
     }
 
     Timer {
@@ -69,7 +74,11 @@ PlasmoidItem {
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
 
-        onClicked: launcher.open()
+        onClicked: {
+            // setsid -f detaches the GUI so the data engine isn't left holding its process. Works for
+            // system packages (qhealth on PATH) and per-user installs (~/.local/bin, often not on plasmashell's PATH)
+            shell.connectSource("q=$(command -v qhealth || echo \"$HOME/.local/bin/qhealth\"); setsid -f \"$q\" >/dev/null 2>&1");
+        }
 
         RowLayout {
             id: contentRow
@@ -84,14 +93,17 @@ PlasmoidItem {
             }
 
             PlasmaComponents3.Label {
-                text: root.isPaused ? "PAUSED" : (root.isIdle ? "IDLE" : root.todayDuration)
+                text: root.isOffline ? "OFF" : (root.isPaused ? "PAUSED" : (root.noInput ? "NO INPUT" : (root.isIdle ? "IDLE" : root.todayDuration)))
                 font.bold: true
                 font.pixelSize: 12
-                color: root.isPaused ? Kirigami.Theme.neutralTextColor : (root.isIdle ? Kirigami.Theme.disabledTextColor : Kirigami.Theme.positiveTextColor)
+                color: root.isOffline || root.isIdle ? Kirigami.Theme.disabledTextColor
+                    : root.isPaused ? Kirigami.Theme.neutralTextColor
+                    : root.noInput ? Kirigami.Theme.negativeTextColor
+                    : Kirigami.Theme.positiveTextColor
             }
 
             PlasmaComponents3.Label {
-                visible: !root.isIdle && !root.isPaused && root.liveWpm > 0
+                visible: !root.isOffline && !root.isIdle && !root.isPaused && root.liveWpm > 0
                 text: "• " + root.liveWpm + " WPM"
                 font.pixelSize: 11
                 opacity: 0.8
@@ -101,7 +113,9 @@ PlasmoidItem {
         PlasmaCore.ToolTipArea {
             anchors.fill: parent
             mainText: "QHealth — Screen Time"
-            subText: "Today: " + root.todayDuration + "\nActive: " + root.activeApp + (root.liveWpm > 0 ? "\nTyping: " + root.liveWpm + " WPM" : "") + "\n\nClick to open full QHealth dashboard."
+            subText: root.isOffline ? "Tracking daemon is not running.\n\nClick to open QHealth."
+                : root.noInput ? "Cannot read keyboard/mouse (/dev/input), so nothing is recorded.\nFix: sudo usermod -aG input $USER, then log out and back in."
+                : "Today: " + root.todayDuration + "\nActive: " + root.activeApp + (root.liveWpm > 0 ? "\nTyping: " + root.liveWpm + " WPM" : "") + "\n\nClick to open full QHealth dashboard."
         }
     }
 }

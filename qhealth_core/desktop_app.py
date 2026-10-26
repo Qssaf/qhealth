@@ -1,21 +1,35 @@
 import os
 import sys
-import json
+import datetime
+from pathlib import Path
 from PyQt6.QtCore import Qt, QTimer, QObject, pyqtSignal
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu
 )
-from PyQt6.QtGui import QIcon, QAction
+from PyQt6.QtGui import QAction
 
 from .tracker import ActivityTracker
 from . import notify
 from .paths import IS_WINDOWS, PID_FILE
-from .db import toggle_pause_setting, is_paused_setting, get_stats_by_range, get_focus_session, data_version
+from .db import (
+    toggle_pause_setting, is_paused_setting, get_stats_by_range, get_focus_session, data_version,
+    get_break_reminder_minutes, set_break_reminder_minutes, DEFAULT_BREAK_REMINDER_MINUTES,
+    export_data_to_json, export_data_to_csv
+)
 from qhealth_gui.main_window import QHealthMainWindow, create_app_icon
 from qhealth_gui.utils import format_duration, format_number
 
-SOCKET_NAME = "qhealth_single_instance_socket"
+def _single_instance_socket_name() -> str:
+    # Per user: a fixed name in /tmp (or a global named pipe on Windows) is shared by every account
+    if IS_WINDOWS:
+        return f"qhealth_single_instance_{os.environ.get('USERNAME', 'user')}"
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime_dir and os.path.isdir(runtime_dir):
+        return os.path.join(runtime_dir, "qhealth.sock")
+    return f"qhealth_single_instance_{os.getuid()}"
+
+SOCKET_NAME = _single_instance_socket_name()
 
 
 class _TrayNotifier(QObject):
@@ -25,15 +39,16 @@ class _TrayNotifier(QObject):
 
 def is_daemon_running() -> bool:
     if IS_WINDOWS:
-        return False  # no separate daemon on Windows (and os.kill(pid, 0) would send Ctrl+C there)
-    if PID_FILE.exists():
-        try:
-            pid = int(PID_FILE.read_text().strip())
-            os.kill(pid, 0)
-            return True
-        except (ValueError, ProcessLookupError, PermissionError):
-            pass
-    return False
+        return False  # no separate daemon on Windows: the tray app tracks
+    # A stale PID file (daemon killed with SIGKILL) may point at a recycled PID,
+    # so also confirm that process really is a QHealth daemon.
+    try:
+        pid = int(PID_FILE.read_text().strip())
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            args = f.read().decode("utf-8", errors="ignore").split("\x00")
+        return "--daemon" in args or "-d" in args
+    except (OSError, ValueError):
+        return False
 
 class QHealthApp:
     def __init__(self):
@@ -63,19 +78,23 @@ class QHealthApp:
             self.daemon.start_embedded()
             self.tracker = self.daemon.tracker
         elif not self.daemon_active:
-            from .db import get_exceeded_app_budgets
+            from .wellbeing import BudgetEnforcer, BreakReminder
             self.tracker = ActivityTracker()
-            self.tracker.update_blocked_apps(get_exceeded_app_budgets())
-            self.tracker.update_focus_session(get_focus_session())
+            # Same budget enforcement and break reminders the daemon would provide
+            self.budget_enforcer = BudgetEnforcer(self.tracker)
+            self.break_reminder = BreakReminder(self.tracker)
+            self._run_wellbeing_checks()
             self.tracker.start()
             self._block_sync_timer = QTimer()
-            self._block_sync_timer.timeout.connect(self._sync_tracker_state)
-            self._block_sync_timer.start(3000)
+            self._block_sync_timer.timeout.connect(self._sync_standalone_tracker)
+            self._block_sync_timer.start(5000)
         else:
             self.tracker = None
 
         # 3. Create Main Window
         self.window = QHealthMainWindow(self.tracker)
+        self.window.on_close = self._on_window_closed
+        self._tray_hint_shown = False
 
         # 4. Create System Tray
         self._setup_tray()
@@ -104,11 +123,30 @@ class QHealthApp:
                 self.show_window()
             client.disconnectFromServer()
 
-    def _sync_tracker_state(self):
-        if self.tracker:
-            from .db import get_exceeded_app_budgets
-            self.tracker.update_blocked_apps(get_exceeded_app_budgets())
+    def _sync_standalone_tracker(self):
+        if is_daemon_running():
+            # Daemon started after the GUI: hand tracking over to avoid double-counting
+            self._block_sync_timer.stop()
+            self.tracker.stop()
+            self.tracker = None
+            self.window.tracker = None
+            return
+        self._run_wellbeing_checks()
+
+    def _run_wellbeing_checks(self):
+        # PyQt aborts the whole app on an exception escaping a slot; a busy DB must not do that
+        try:
+            self.budget_enforcer.check()
+        except Exception:
+            pass
+        try:
+            self.break_reminder.check(get_break_reminder_minutes())
+        except Exception:
+            pass
+        try:
             self.tracker.update_focus_session(get_focus_session())
+        except Exception:
+            pass
 
     def _setup_tray(self):
         self.tray = QSystemTrayIcon(self.icon, self.app)
@@ -141,6 +179,23 @@ class QHealthApp:
         self.pause_action.triggered.connect(self._toggle_pause)
         self.tray_menu.addAction(self.pause_action)
 
+        self.break_action = QAction(f"Break Reminders (every {DEFAULT_BREAK_REMINDER_MINUTES} min)", self.app)
+        self.break_action.setCheckable(True)
+        try:
+            self.break_action.setChecked(get_break_reminder_minutes() > 0)
+        except Exception:
+            pass
+        self.break_action.toggled.connect(self._toggle_break_reminders)
+        self.tray_menu.addAction(self.break_action)
+
+        export_menu = self.tray_menu.addMenu("Export Data")
+        json_action = QAction("Full Backup (JSON)…", self.app)
+        json_action.triggered.connect(lambda: self._export("json"))
+        export_menu.addAction(json_action)
+        csv_action = QAction("Activity History (CSV)…", self.app)
+        csv_action.triggered.connect(lambda: self._export("csv"))
+        export_menu.addAction(csv_action)
+
         if IS_WINDOWS:
             from . import win32
             self.autostart_action = QAction("Start with Windows", self.app)
@@ -161,6 +216,7 @@ class QHealthApp:
         self.tray_menu.addAction(quit_action)
 
         self.tray.setContextMenu(self.tray_menu)
+        self.tray_menu.aboutToShow.connect(self._refresh_tray_stats)
         self.tray.activated.connect(self._on_tray_activated)
         self.tray.show()
 
@@ -169,7 +225,7 @@ class QHealthApp:
         self._tray_stats = {}
         self.tray_timer = QTimer(self.app)
         self.tray_timer.timeout.connect(self._refresh_tray_stats)
-        self.tray_timer.start(3000)
+        self.tray_timer.start(15000)
         self._refresh_tray_stats()
 
     def _open_focus_dialog(self):
@@ -233,6 +289,42 @@ class QHealthApp:
         self.pause_action.setText("Resume Tracking" if new_paused else "Pause Tracking")
         self.window.btn_pause.setText("Resume" if new_paused else "Pause")
         self.window.btn_pause.setChecked(new_paused)
+
+    def _toggle_break_reminders(self, enabled: bool):
+        try:
+            set_break_reminder_minutes(DEFAULT_BREAK_REMINDER_MINUTES if enabled else 0)
+        except Exception:
+            pass
+
+    def _export(self, kind: str):
+        from PyQt6.QtWidgets import QFileDialog
+        stamp = datetime.date.today().isoformat()
+        name = f"qhealth-backup-{stamp}.json" if kind == "json" else f"qhealth-history-{stamp}.csv"
+        file_filter = "JSON (*.json)" if kind == "json" else "CSV (*.csv)"
+        path, _ = QFileDialog.getSaveFileName(None, "Export QHealth Data", str(Path.home() / name), file_filter)
+        if not path:
+            return
+        try:
+            if kind == "json":
+                export_data_to_json(path)
+            else:
+                export_data_to_csv(path)
+            self.tray.showMessage("QHealth", f"Exported to {path}", QSystemTrayIcon.MessageIcon.Information, 4000)
+        except Exception as e:
+            self.tray.showMessage("QHealth", f"Export failed: {e}", QSystemTrayIcon.MessageIcon.Warning, 6000)
+
+    def _on_window_closed(self):
+        if self.tracker is None:
+            # Viewer only: the daemon keeps tracking, so nothing needs to stay resident
+            self.quit()
+        elif not self._tray_hint_shown:
+            # This process is the tracker (no daemon / Windows), so closing must not stop it, but say so
+            self._tray_hint_shown = True
+            self.tray.showMessage(
+                "QHealth is still tracking",
+                "QHealth keeps tracking from the tray. Use Quit in the tray menu to stop.",
+                QSystemTrayIcon.MessageIcon.Information, 6000
+            )
 
     def show_window(self):
         self.window.show()

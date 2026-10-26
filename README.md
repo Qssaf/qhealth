@@ -73,6 +73,8 @@ To count keystrokes and clicks it reads `/dev/input`, so your account must be in
 sudo usermod -aG input "$USER"   # then log out and back in
 ```
 
+Without it nothing is recorded, and QHealth says **No input access** (dashboard, panel widget and a notification).
+
 > Being in `input` lets any program you run read raw keyboard/mouse events — that is how QHealth works,
 > and it keeps everything in a local SQLite database (`~/.local/share/qhealth/`). Nothing is sent anywhere.
 
@@ -136,6 +138,17 @@ python3 main.py --daemon   # tracking daemon in the foreground
 
 Python packaging (`pyproject.toml`) is included too: `pipx install .` gives you the `qhealth` command
 (without the desktop entry and service files).
+
+### Good to know
+
+- After updating, restart tracking so the daemon runs the new code: `systemctl --user restart qhealth`.
+  Database upgrades happen automatically on the next start, and all history is kept.
+- With the service running, the window is only a viewer: closing it (X or Esc) exits completely.
+  Without the service (and always on Windows) the app does the tracking itself, so closing keeps it in the
+  tray — it tells you so; use **Quit** in the tray menu to stop.
+- The Plasma panel widget is installed by the package and `install.sh`. From a source checkout:
+  `kpackagetool6 --type Plasma/Applet --install plasma_plasmoid/org.kde.plasma.qhealth`
+  (`--upgrade` after pulling), then **Add Widgets… → QHealth Status**. It shows **OFF** when the daemon isn't running.
 
 ---
 

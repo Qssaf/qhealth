@@ -9,6 +9,7 @@ STATUS = {  # state -> (badge text, tone)
     "live": ("● Live", "good"),
     "idle": ("● Idle", ""),
     "paused": ("● Paused", "warn"),
+    "no_input": ("● No input access", "bad"),
 }
 
 
@@ -87,8 +88,16 @@ class LivePulseWidget(QFrame):
         if not data:
             return
 
+        no_input = data.get("input_access_denied", False)
+        # Explain why nothing is being recorded; cleared as soon as access works
+        self.badge.setToolTip(
+            "QHealth cannot read /dev/input, so no activity is recorded.\n"
+            "Fix: sudo usermod -aG input $USER, then log out and back in." if no_input else ""
+        )
         if data.get("is_paused", False):
             self._set_status("paused")
+        elif no_input:
+            self._set_status("no_input")
         elif data.get("is_idle", False):
             self._set_status("idle")
         else:

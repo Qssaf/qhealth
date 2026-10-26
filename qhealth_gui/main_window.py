@@ -10,11 +10,10 @@ from PyQt6.QtGui import QIcon, QKeySequence, QPixmap, QPainter, QColor, QShortcu
 
 from qhealth_core.db import (
     get_stats_by_range, get_activity_heatmap_data, get_app_detail_stats,
-    get_keyboard_heatmap_data, get_mouse_heatmap_data, toggle_pause_setting, is_paused_setting,
+    get_keyboard_heatmap_data, get_mouse_heatmap_data, toggle_pause_setting,
     get_activity_streak_stats, get_focus_session, data_version
 )
 
-from qhealth_core.tracker import input_access_ok
 from qhealth_core.paths import STATE_FILE
 
 from . import theme as t
@@ -77,8 +76,10 @@ class QHealthMainWindow(QMainWindow):
         self.current_range = "day"  # day, week, month, year, all_time
         self.selected_date = datetime.date.today().strftime("%Y-%m-%d")
         self.active_drilldown_app_id = ""
+        self._today_str = self.selected_date
+        self.on_close = None  # set by the app to decide between quitting and staying in the tray
         self._data_version = None   # DB file signature at the last refresh
-        self._streak_checked = 0.0  # streak only changes daily; re-query at most once a minute
+        self._last_streak_poll = 0.0  # streak only changes daily; re-query at most once a minute
 
         apply_theme(QApplication.instance())
         self.setWindowTitle("QHealth")
@@ -112,7 +113,7 @@ class QHealthMainWindow(QMainWindow):
         self.input_banner.setTextFormat(Qt.TextFormat.RichText)
         self.input_banner.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.input_banner.setWordWrap(True)
-        self.input_banner.setVisible(not input_access_ok())
+        self.input_banner.hide()  # shown when the tracker reports it can't open /dev/input
         col.addWidget(self.input_banner)
 
         self.main_stack = QStackedWidget()
@@ -183,7 +184,7 @@ class QHealthMainWindow(QMainWindow):
         self.live_timer.start(3000)
 
         self.db_timer = QTimer(self)
-        self.db_timer.timeout.connect(lambda: self._poll_db(force=False))
+        self.db_timer.timeout.connect(self._on_db_timer)
         self.db_timer.start(3000)
 
         # Data loads in showEvent (and again whenever the window is re-shown from the tray)
@@ -323,6 +324,11 @@ class QHealthMainWindow(QMainWindow):
 
         parent_layout.addLayout(bar)
 
+    def closeEvent(self, event):
+        super().closeEvent(event)
+        if self.on_close:
+            self.on_close()
+
     def showEvent(self, event):
         # Polling pauses while hidden in the tray; catch up the moment the window comes back
         super().showEvent(event)
@@ -340,6 +346,16 @@ class QHealthMainWindow(QMainWindow):
         super().resizeEvent(event)
 
     # ----------------------------------------------------------------- header
+    def _roll_over_midnight(self):
+        today_str = datetime.date.today().strftime("%Y-%m-%d")
+        if today_str != self._today_str:
+            # Window left open past midnight: follow "today" if the user was viewing it
+            if self.selected_date == self._today_str:
+                self.selected_date = today_str
+                self.date_btn.set_date_str(today_str)
+            self._today_str = today_str
+            self._refresh_header()
+
     def _refresh_header(self):
         try:
             anchor = datetime.datetime.strptime(self.selected_date, "%Y-%m-%d").date()
@@ -422,6 +438,8 @@ class QHealthMainWindow(QMainWindow):
         self.active_drilldown_app_id = ""
         self.apps_sub_stack.setCurrentIndex(0)
         t.fade_in(self.apps_leaderboard)
+        # Reflect a budget edited in the detail view right away
+        self._poll_db()
 
     def _open_focus_dialog(self):
         active_name = ""
@@ -444,18 +462,20 @@ class QHealthMainWindow(QMainWindow):
             return
         try:
             metrics = None
-            if STATE_FILE.exists():
-                try:
+            try:
+                # Ignore a leftover file from a daemon that died without cleanup (it heartbeats every 5 s)
+                if time.time() - STATE_FILE.stat().st_mtime < 10:
                     with open(STATE_FILE, "r") as f:
                         metrics = json.load(f)
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
             if not metrics and self.tracker:
                 metrics = self.tracker.get_live_metrics()
 
             if metrics:
                 self.live_widget.update_metrics(metrics)
+                self.input_banner.setVisible(bool(metrics.get("input_access_denied")))
                 if metrics.get("is_paused") != self.btn_pause.isChecked():
                     self.btn_pause.setChecked(metrics.get("is_paused", False))
                     self.btn_pause.setText("Resume" if metrics.get("is_paused") else "Pause")
@@ -482,11 +502,37 @@ class QHealthMainWindow(QMainWindow):
         except Exception:
             pass
 
-    def _poll_db(self, force: bool = True):
-        """Refresh only what's on screen. Timer ticks (force=False) are skipped entirely unless
-        another process committed to the DB since the last refresh, or the window is hidden."""
-        if not force and (not self._is_shown() or data_version() == self._data_version):
+    def _on_db_timer(self):
+        """3 s tick. Skipped while hidden, for ranges that ended on a past date, and whenever
+        nothing was committed to the DB since the last refresh."""
+        if not self._is_shown():
+            return  # showEvent refreshes everything on the way back
+        self._roll_over_midnight()
+        # The streak is always "as of today", whatever date is being viewed
+        self._refresh_streak()
+        # Ranges ending on a past date can't change, so only explicit navigation reloads them.
+        # All Time has no end date, so it still includes today.
+        if self.selected_date < self._today_str and self.current_range != "all_time":
             return
+        if data_version() == self._data_version:
+            return
+        self._poll_db()
+
+    def _refresh_streak(self):
+        # Streak scans every day's totals; once a minute is plenty
+        if time.monotonic() - self._last_streak_poll < 60:
+            return
+        self._last_streak_poll = time.monotonic()
+        try:
+            streak_days = get_activity_streak_stats().get("current_streak", 0)
+        except Exception:
+            return
+        self.streak_badge.setText(f"{streak_days}-day streak" if streak_days > 0 else "No streak yet")
+        t.set_prop(self.streak_badge, "tone", "accent" if streak_days > 0 else "")
+
+    def _poll_db(self):
+        """Refresh only what's on screen (other pages refresh when switched to)."""
+        self._refresh_streak()
         try:
             version = data_version()  # read first: a write landing mid-refresh triggers the next tick
             stats = get_stats_by_range(self.current_range, self.selected_date)
@@ -497,21 +543,13 @@ class QHealthMainWindow(QMainWindow):
             clicks = stats.get("total_clicks", 0)
             scrolls = stats.get("total_scrolls", 0)
 
-            if force or time.monotonic() - self._streak_checked > 60:
-                self._streak_checked = time.monotonic()
-                try:
-                    streak_days = get_activity_streak_stats().get("current_streak", 0)
-                    self.streak_badge.setText(f"{streak_days}-day streak" if streak_days > 0 else "No streak yet")
-                    t.set_prop(self.streak_badge, "tone", "accent" if streak_days > 0 else "")
-                except Exception:
-                    pass
-
             page = self.main_stack.currentIndex()
+            viewing_today = self.selected_date == self._today_str
             if page == 0:
                 top_app = apps[0] if apps else {}
                 self.stat_cards.update_stats(
                     total_seconds, keys, clicks, scrolls, top_app.get("app_name", ""), top_app.get("percentage", 0.0),
-                    stats.get("focus_score", 100), stats.get("focus_rating", "Deep Work"))
+                    stats.get("focus_score", 0), stats.get("focus_rating", "No Activity"))
                 self.radial_widget.update_data(total_seconds, apps, self.current_range)
                 self.timeline_widget.update_data(timeline, self.current_range)
             elif page == 1:
@@ -521,11 +559,12 @@ class QHealthMainWindow(QMainWindow):
                     keys, clicks, scrolls,
                     get_keyboard_heatmap_data(self.current_range, self.selected_date) if hardware else None,
                     get_mouse_heatmap_data(self.current_range, self.selected_date) if hardware else None,
-                    None if hardware else get_activity_heatmap_data(days=70),
+                    None if hardware else get_activity_heatmap_data(days=70, target_date=self.selected_date),
                     timeline, self.current_range,
                 )
             else:
-                self.apps_leaderboard.update_apps(apps)
+                # Only today's Day view can say an app is blocked right now
+                self.apps_leaderboard.update_apps(apps, can_block=(self.current_range == "day" and viewing_today))
                 if self.apps_sub_stack.currentIndex() == 1 and self.active_drilldown_app_id:
                     detail_stats = get_app_detail_stats(self.active_drilldown_app_id, self.current_range, self.selected_date)
                     self.app_detail_view.set_app_data(detail_stats, self.current_range)

@@ -8,8 +8,8 @@ RANGE_TITLES = {
     "day": ("Hourly activity", "Active time per hour"),
     "week": ("Daily activity", "7-day window"),
     "month": ("Daily activity", "30-day window"),
-    "year": ("Monthly activity", "12-month window"),
-    "all_time": ("Monthly activity", "Every recorded month"),
+    "year": ("Monthly activity", "Last 12 months"),
+    "all_time": ("Activity over time", "By month, or by year once history spans more than 12 months"),
 }
 
 
@@ -28,7 +28,7 @@ class HourlyTimelineWidget(QFrame):
         self.painter_widget.setAccessibleName("Screen time over the selected range")
         lay.addWidget(self.painter_widget, 1)
 
-    def update_data(self, timeline_data: List[Dict[str, Any]], range_type: str = "day"):
+    def update_data(self, timeline_data: List[Dict[str, Any]], range_type: str = "day", is_today: bool = True):
         t_title, t_sub = RANGE_TITLES.get(range_type, ("Activity", ""))
         self.title_lbl.setText(t_title)
         self.sub_lbl.setText(t_sub)

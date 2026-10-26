@@ -33,12 +33,13 @@ def row_columns(left: float, width: float) -> Dict[str, Tuple[float, float]]:
     return cols
 
 
-def budget_badge(app_data: Dict[str, Any]) -> Tuple[str, str]:
+def budget_badge(app_data: Dict[str, Any], can_block: bool = True) -> Tuple[str, str]:
     budget_mins = app_data.get("budget_minutes")
     if not budget_mins:
         return "", ""
     b_pct = app_data.get("budget_percentage", 0)
-    if b_pct is not None and b_pct >= 100 and app_data.get("block_on_exceed", False):
+    # Weekly/monthly usage past N x the daily limit, or a past day, is not "blocked now"
+    if can_block and b_pct is not None and b_pct >= 100 and app_data.get("block_on_exceed", False):
         return f"Blocked · {b_pct}%", "bad"
     tone = "good" if b_pct is None or b_pct < 80 else ("warn" if b_pct < 100 else "bad")
     return (f"{b_pct}% of {budget_mins}m limit" if b_pct is not None else f"{budget_mins}m limit"), tone
@@ -60,7 +61,7 @@ class AppRowDelegate(QStyledItemDelegate):
         return QSize(option.rect.width(), ROW_H)
 
     def paint(self, p: QPainter, option, index):
-        app, rank, color = index.data(Qt.ItemDataRole.UserRole)
+        app, rank, color, can_block = index.data(Qt.ItemDataRole.UserRole)
         r = QRectF(option.rect).adjusted(0, 0, 0, -ROW_GAP)
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
         focused = bool(option.state & QStyle.StateFlag.State_HasFocus)
@@ -94,7 +95,7 @@ class AppRowDelegate(QStyledItemDelegate):
         nx, nw = cols["name"]
         text("name", top + 8, 20, name, self.f_name, t.TEXT)
         id_text = app_id or "application"
-        badge, tone = budget_badge(app)
+        badge, tone = budget_badge(app, can_block)
         id_w = min(QFontMetrics(self.f_caption).horizontalAdvance(id_text) + 2, nw * (0.55 if badge else 1.0))
         text((nx, id_w), top + 28, 16, id_text, self.f_caption, t.TEXT_3)
         if badge:
@@ -167,6 +168,7 @@ class AppLeaderboardWidget(QFrame):
         self.apps: List[Dict[str, Any]] = []
         self.sort_by = "duration"
         self.search_text = ""
+        self.can_block = True
 
         main_lay = QVBoxLayout(self)
         main_lay.setContentsMargins(t.PAD, t.PAD, t.PAD - 6, t.PAD)
@@ -253,10 +255,11 @@ class AppLeaderboardWidget(QFrame):
         self.search_text = text.lower().strip()
         self._refresh_list()
 
-    def update_apps(self, apps: List[Dict[str, Any]]):
-        if self.apps == apps:
+    def update_apps(self, apps: List[Dict[str, Any]], can_block: bool = True):
+        if self.apps == apps and self.can_block == can_block:
             return
         self.apps = apps
+        self.can_block = can_block
         self.count_lbl.setText(f"{len(apps)} application{'s' if len(apps) != 1 else ''} tracked")
         self._refresh_list()
 
@@ -277,7 +280,7 @@ class AppLeaderboardWidget(QFrame):
         self.list.setVisible(bool(filtered))
         self.header.setVisible(bool(filtered))
 
-        rows = [(app, idx, get_app_color(app.get("app_name", ""), color_rank.get(app.get("app_id", ""), idx)))
+        rows = [(app, idx, get_app_color(app.get("app_name", ""), color_rank.get(app.get("app_id", ""), idx)), self.can_block)
                 for idx, app in enumerate(filtered)]
         if self.list.count() != len(rows):
             self.list.clear()

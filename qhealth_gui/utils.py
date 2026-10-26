@@ -110,7 +110,8 @@ def get_app_icon_pixmap(icon_name: str, app_name: str, size: int = 32) -> QPixma
                     ico = QIcon(os.path.join(d, f"{cand}{ext}"))
                     if not ico.isNull():
                         return ico.pixmap(size, size)
-            match = next((n for n in names if cand in n), None)
+            # Fuzzy match only for meaningful names: '*x*' would pick an arbitrary icon
+            match = next((n for n in names if cand in n), None) if len(cand) >= 3 else None
             if match:
                 ico = QIcon(os.path.join(d, match))
                 if not ico.isNull():

@@ -182,7 +182,8 @@ class RadialChartWidget(QFrame):
         self.content.addLayout(legend, 1)
         layout.addLayout(self.content, 1)
 
-    def update_data(self, total_seconds: int, apps: List[Dict[str, Any]], range_type: str = "day"):
+    def update_data(self, total_seconds: int, apps: List[Dict[str, Any]], range_type: str = "day", target_date: str = ""):
+        # range_type / target_date are shown once, in the window's top bar
         self.ring_painter.set_data(total_seconds, apps)
         top = apps[:TOP_N]
         self.empty_lbl.setVisible(not top)
