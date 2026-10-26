@@ -1,218 +1,190 @@
 import math
-from typing import List, Dict, Any
-from PyQt6.QtCore import Qt, QRectF, QPoint
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QToolTip
-from PyQt6.QtGui import QPainter, QPen, QColor, QFont, QBrush
+from typing import List, Dict, Any, Callable, Optional
+from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFrame, QToolTip, QSizePolicy, QBoxLayout
+from PyQt6.QtGui import QPainter, QPen, QColor, QFont
+from .. import theme as t
 from ..utils import format_duration, format_number, get_app_color, get_app_icon_pixmap
+from .common import ClickableFrame, card_header, sync_rows
+
+TOP_N = 5
+
 
 class RadialRingPainter(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(220, 220)
+        self.setMinimumSize(200, 200)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         self.total_seconds = 0
         self.apps: List[Dict[str, Any]] = []
+        self.hover = -1
+        self.arc_spans = []  # (start_deg_from_top, span_deg, idx)
+        self._geom = (0.0, 0.0, 0.0, 0.0)  # cx, cy, radius, stroke
         self.setMouseTracking(True)
-        self.arc_spans = [] # list of (start_angle_deg, span_deg, app_dict)
+        self.setAccessibleName("Screen time share by application")
 
     def set_data(self, total_seconds: int, apps: List[Dict[str, Any]]):
         self.total_seconds = total_seconds
         self.apps = apps
+        self.setAccessibleDescription(
+            ", ".join(f"{a.get('app_name', '')} {a.get('percentage', 0)}%" for a in apps[:TOP_N]) or "No activity"
+        )
         self.update()
 
+    def _hit(self, pos) -> int:
+        cx, cy, r, stroke = self._geom
+        dx, dy = pos.x() - cx, pos.y() - cy
+        dist = math.hypot(dx, dy)
+        if dist < r - stroke / 2:
+            return -2  # centre
+        if dist > r + stroke / 2 + 6:
+            return -1
+        angle = (math.degrees(math.atan2(dy, dx)) + 90) % 360
+        return next((idx for start, span, idx in self.arc_spans if start <= angle <= start + span), -1)
+
     def mouseMoveEvent(self, event):
-        pos = event.pos()
-        w = self.width()
-        h = self.height()
-        size = min(w, h) - 24
-        cx = w / 2.0
-        cy = h / 2.0
-        r_mid = size / 2.0
-        stroke_w = 16.0
+        idx = self._hit(event.position())
+        if idx != self.hover:
+            self.hover = idx
+            self.update()
+        gp = event.globalPosition().toPoint()
+        if idx >= 0:
+            app = self.apps[idx]
+            QToolTip.showText(gp, (
+                f"{app.get('app_name', 'Unknown')}\n"
+                f"{format_duration(app.get('duration', 0))}  ·  {app.get('percentage', 0.0)}% of screen time\n"
+                f"{format_number(app.get('keystrokes', 0))} keys  ·  {format_number(app.get('clicks', 0))} clicks"
+            ), self)
+        elif idx == -2:
+            QToolTip.showText(gp, f"Total screen time: {format_duration(self.total_seconds)}", self)
+        else:
+            QToolTip.hideText()
 
-        dx = pos.x() - cx
-        dy = pos.y() - cy
-        dist = math.sqrt(dx * dx + dy * dy)
-
-        # 1. Check if hovering within ring band
-        if (r_mid - stroke_w / 2.0 - 5.0) <= dist <= (r_mid + stroke_w / 2.0 + 5.0):
-            # Calculate angle in degrees from top (clockwise, 0 = 12 o'clock)
-            angle_rad = math.atan2(dy, dx)
-            deg = math.degrees(angle_rad)
-            angle_from_top = (deg + 90) % 360
-
-            cur_angle = 0.0
-            if self.total_seconds > 0:
-                for app in self.apps[:5]:
-                    dur = app.get("duration", 0)
-                    if dur <= 0:
-                        continue
-                    span_deg = (dur / float(self.total_seconds)) * 360.0
-                    if cur_angle <= angle_from_top <= (cur_angle + span_deg):
-                        app_name = app.get("app_name", "Unknown")
-                        pct = app.get("percentage", 0.0)
-                        keys = app.get("keystrokes", 0)
-                        clicks = app.get("clicks", 0)
-                        tip = (
-                            f"📱 {app_name}\n"
-                            f"⏱ Active: {format_duration(dur)} ({pct}%)\n"
-                            f"⌨ Keys: {format_number(keys)} · 🖱 Clicks: {format_number(clicks)}"
-                        )
-                        QToolTip.showText(event.globalPosition().toPoint(), tip, self)
-                        return
-                    cur_angle += span_deg
-
-        # 2. Check if hovering inside the center circle
-        elif dist < (r_mid - stroke_w / 2.0):
-            tip = f"⏱ Total Screen Time: {format_duration(self.total_seconds)}"
-            QToolTip.showText(event.globalPosition().toPoint(), tip, self)
-            return
-
-        super().mouseMoveEvent(event)
+    def leaveEvent(self, event):
+        self.hover = -1
+        self.update()
+        super().leaveEvent(event)
 
     def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        w = self.width()
-        h = self.height()
-        size = min(w, h) - 24
-        x = (w - size) / 2
-        y = (h - size) / 2
-        rect = QRectF(x, y, size, size)
+        w, h = float(self.width()), float(self.height())
+        size = max(120.0, min(240.0, min(w, h) - 16))
+        stroke = max(12.0, min(20.0, size * 0.085))
+        r = (size - stroke) / 2
+        cx, cy = w / 2, h / 2
+        self._geom = (cx, cy, r, stroke)
+        ring = QRectF(cx - r, cy - r, 2 * r, 2 * r)
 
-        stroke_width = 16.0
+        track = QPen(QColor(t.RAISED), stroke)
+        track.setCapStyle(Qt.PenCapStyle.FlatCap)
+        p.setPen(track)
+        p.drawEllipse(ring)
 
-        # Background track
-        track_pen = QPen(QColor(30, 41, 59, 150), stroke_width)
-        track_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(track_pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawEllipse(rect)
-
-        # Draw Top Applications segments
-        if self.total_seconds > 0 and self.apps:
-            start_angle = 90 * 16 # Start from top (90 deg in 1/16th deg units)
-            for idx, app in enumerate(self.apps[:5]):
+        self.arc_spans = []
+        if self.total_seconds > 0:
+            gap = math.degrees(2.5 / max(1.0, r))  # 2.5px surface gap between segments
+            cur = 0.0
+            for idx, app in enumerate(self.apps[:TOP_N]):
                 dur = app.get("duration", 0)
                 if dur <= 0:
                     continue
-                span = -min(360 * 16, int((dur / float(self.total_seconds)) * 360 * 16))
-                app_color = get_app_color(app.get("app_name", ""), idx)
+                span = min(360.0, dur / float(self.total_seconds) * 360.0)
+                self.arc_spans.append((cur, span, idx))
+                draw_span = span - gap if span > gap * 2 else span
+                pen = QPen(get_app_color(app.get("app_name", ""), idx), stroke + (4 if idx == self.hover else 0))
+                pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+                p.setPen(pen)
+                # Qt angles: 1/16 deg, counter-clockwise from 3 o'clock; clamp to a full turn.
+                start16 = int((90 - cur - gap / 2) * 16)
+                p.drawArc(ring, start16, -min(360 * 16, int(draw_span * 16)))
+                cur += span
 
-                pen = QPen(app_color, stroke_width)
-                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-                painter.setPen(pen)
-                painter.drawArc(rect, start_angle, span)
+        p.setPen(QColor(t.TEXT))
+        p.setFont(t.font(max(16, int(size * 0.13)), QFont.Weight.DemiBold))
+        p.drawText(QRectF(cx - r, cy - size * 0.13, 2 * r, size * 0.17), Qt.AlignmentFlag.AlignCenter, format_duration(self.total_seconds))
+        p.setPen(QColor(t.TEXT_3))
+        p.setFont(t.font(12))
+        p.drawText(QRectF(cx - r, cy + size * 0.05, 2 * r, 18), Qt.AlignmentFlag.AlignCenter, "screen time")
+        p.end()
 
-                start_angle += span
 
-        # Center typography
-        painter.setPen(QColor("#f8fafc"))
-        font = QFont("Inter", 18, QFont.Weight.Bold)
-        font.setStyleHint(QFont.StyleHint.SansSerif)
-        painter.setFont(font)
+class LegendRow(ClickableFrame):
+    def __init__(self, on_click: Optional[Callable[[Dict[str, Any]], None]], parent=None):
+        super().__init__(parent)
+        self.app: Dict[str, Any] = {}
+        if on_click:
+            self.clicked.connect(lambda: on_click(self.app))
+        else:
+            self.setProperty("class", "Static")
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-        dur_text = format_duration(self.total_seconds)
-        text_rect = QRectF(x, y + size * 0.32, size, size * 0.22)
-        painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, dur_text)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 7, 12, 7)
+        lay.setSpacing(10)
+        self.swatch = QFrame()
+        self.swatch.setFixedSize(4, 22)
+        lay.addWidget(self.swatch)
+        self.icon_lbl = t.label()
+        self.icon_lbl.setFixedSize(20, 20)
+        lay.addWidget(self.icon_lbl)
+        self.name_lbl = t.label("", "h3")
+        lay.addWidget(self.name_lbl, 1)
+        self.dur_lbl = t.label("", "mono-strong")
+        lay.addWidget(self.dur_lbl)
+        self.pct_lbl = t.label("", "caption")
+        self.pct_lbl.setFixedWidth(46)
+        self.pct_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(self.pct_lbl)
 
-        painter.setPen(QColor("#94a3b8"))
-        sub_font = QFont("Inter", 9, QFont.Weight.Medium)
-        painter.setFont(sub_font)
-        sub_rect = QRectF(x, y + size * 0.54, size, size * 0.16)
-        painter.drawText(sub_rect, Qt.AlignmentFlag.AlignCenter, "Total Active")
-
-        painter.end()
+    def set_data(self, app: Dict[str, Any], color: QColor):
+        self.app = app
+        name = app.get("app_name", "Unknown")
+        self.swatch.setStyleSheet(f"background: {color.name()}; border-radius: 2px; border: none;")
+        self.icon_lbl.setPixmap(get_app_icon_pixmap(app.get("icon", app.get("app_id", "")), name, 20))
+        self.name_lbl.setText(name if len(name) <= 22 else name[:20] + "…")
+        self.name_lbl.setToolTip(name)
+        self.dur_lbl.setText(format_duration(app.get("duration", 0)))
+        self.pct_lbl.setText(f"{app.get('percentage', 0)}%")
+        self.setAccessibleName(f"{name}, {format_duration(app.get('duration', 0))}")
 
 
 class RadialChartWidget(QFrame):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, on_app_click: Optional[Callable[[Dict[str, Any]], None]] = None):
         super().__init__(parent)
-        self.setProperty("class", "GlassCard")
+        self.setProperty("class", "Card")
         self.setObjectName("RadialCard")
+        self.on_app_click = on_app_click
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setContentsMargins(t.PAD, t.PAD, t.PAD, t.PAD)
         layout.setSpacing(12)
-
-        # Header
-        hdr = QHBoxLayout()
-        title = QLabel("TOP APPLICATIONS BREAKDOWN")
-        title.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px;")
-        self.tag_lbl = QLabel("Today")
-        self.tag_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #34d399; background-color: rgba(16,185,129,0.15); padding: 2px 8px; border-radius: 4px; border: 1px solid rgba(16,185,129,0.3);")
-        hdr.addWidget(title)
-        hdr.addStretch()
-        hdr.addWidget(self.tag_lbl)
+        hdr, _, self.tag_lbl = card_header("Top applications", "Share of screen time")
         layout.addLayout(hdr)
 
-        # Main content (Radial Ring + Top Apps Legend)
-        content = QHBoxLayout()
-        content.setSpacing(16)
-
+        self.content = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.content.setSpacing(t.GAP)
         self.ring_painter = RadialRingPainter(self)
-        content.addWidget(self.ring_painter, alignment=Qt.AlignmentFlag.AlignCenter)
+        self.content.addWidget(self.ring_painter, 1)
 
-        # Legend list
+        legend = QVBoxLayout()
+        legend.addStretch()
+        self.empty_lbl = t.label("No app activity in this range yet.", "empty")
+        self.empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        legend.addWidget(self.empty_lbl)
         self.legend_layout = QVBoxLayout()
         self.legend_layout.setSpacing(6)
-        self.legend_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        content.addLayout(self.legend_layout)
-
-        layout.addLayout(content)
+        self.legend_rows: List[LegendRow] = []
+        legend.addLayout(self.legend_layout)
+        legend.addStretch()
+        self.content.addLayout(legend, 1)
+        layout.addLayout(self.content, 1)
 
     def update_data(self, total_seconds: int, apps: List[Dict[str, Any]], range_type: str = "day"):
         self.ring_painter.set_data(total_seconds, apps)
-
-        range_tags = {
-            "day": "Today",
-            "week": "Last 7 Days",
-            "month": "Last 30 Days",
-            "year": "This Year",
-            "all_time": "All Time"
-        }
-        self.tag_lbl.setText(range_tags.get(range_type, "Custom"))
-
-        # Clear legend
-        while self.legend_layout.count():
-            item = self.legend_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        if not apps:
-            empty_lbl = QLabel("No active apps in range")
-            empty_lbl.setStyleSheet("color: #64748b; font-size: 11px; font-style: italic;")
-            self.legend_layout.addWidget(empty_lbl)
-            return
-
-        # Add top 5 applications
-        for idx, app in enumerate(apps[:5]):
-            app_name = app.get("app_name", "Unknown")
-            app_id = app.get("app_id", "")
-            icon_name = app.get("icon", app_id)
-            dur = app.get("duration", 0)
-            pct = app.get("percentage", 0)
-
-            row = QFrame()
-            row.setProperty("class", "GlassCardInner")
-            r_lay = QHBoxLayout(row)
-            r_lay.setContentsMargins(10, 6, 10, 6)
-            r_lay.setSpacing(8)
-
-            # App icon
-            icon_lbl = QLabel()
-            icon_lbl.setFixedSize(20, 20)
-            icon_lbl.setPixmap(get_app_icon_pixmap(icon_name, app_name, 20))
-
-            name_lbl = QLabel(app_name)
-            name_lbl.setStyleSheet("font-size: 12px; font-weight: 700; color: #ffffff;")
-
-            dur_lbl = QLabel(f"{format_duration(dur)} ({pct}%)")
-            dur_lbl.setStyleSheet("font-size: 11px; color: #34d399; font-family: monospace; font-weight: 600;")
-
-            r_lay.addWidget(icon_lbl)
-            r_lay.addWidget(name_lbl)
-            r_lay.addStretch()
-            r_lay.addWidget(dur_lbl)
-
-            self.legend_layout.addWidget(row)
+        top = apps[:TOP_N]
+        self.empty_lbl.setVisible(not top)
+        items = [(app, get_app_color(app.get("app_name", ""), idx)) for idx, app in enumerate(top)]
+        sync_rows(self.legend_rows, self.legend_layout, items, lambda: LegendRow(self.on_app_click, self))

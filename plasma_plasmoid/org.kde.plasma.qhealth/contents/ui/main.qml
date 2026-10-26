@@ -5,6 +5,8 @@ import QtCore
 import org.kde.plasma.plasmoid
 import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.components as PlasmaComponents3
+import org.kde.plasma.plasma5support as P5Support
+import org.kde.kirigami as Kirigami
 
 PlasmoidItem {
     id: root
@@ -39,6 +41,17 @@ PlasmoidItem {
         doc.send();
     }
 
+    // Runs `qhealth` whether it is installed system-wide or per user (~/.local/bin may not be on plasmashell's PATH)
+    P5Support.DataSource {
+        id: launcher
+        engine: "executable"
+        connectedSources: []
+        onNewData: (sourceName, data) => launcher.disconnectSource(sourceName)
+        function open() {
+            connectSource("sh -c 'command -v qhealth >/dev/null && exec qhealth || exec \"$HOME/.local/bin/qhealth\"'")
+        }
+    }
+
     Timer {
         interval: 2000
         running: true
@@ -56,34 +69,32 @@ PlasmoidItem {
         hoverEnabled: true
         cursorShape: Qt.PointingHandCursor
 
-        onClicked: {
-            var homePath = StandardPaths.writableLocation(StandardPaths.HomeLocation);
-            var execUrl = "file://" + homePath + "/.local/bin/qhealth";
-            Qt.openUrlExternally(execUrl);
-        }
+        onClicked: launcher.open()
 
         RowLayout {
             id: contentRow
             anchors.centerIn: parent
             spacing: 6
 
-            PlasmaComponents3.Label {
-                text: "⏱"
-                font.pixelSize: 13
+            Kirigami.Icon {
+                source: "qhealth"
+                fallback: "chronometer"
+                implicitWidth: Kirigami.Units.iconSizes.small
+                implicitHeight: Kirigami.Units.iconSizes.small
             }
 
             PlasmaComponents3.Label {
                 text: root.isPaused ? "PAUSED" : (root.isIdle ? "IDLE" : root.todayDuration)
                 font.bold: true
                 font.pixelSize: 12
-                color: root.isPaused ? "#fbbf24" : (root.isIdle ? "#94a3b8" : "#34d399")
+                color: root.isPaused ? Kirigami.Theme.neutralTextColor : (root.isIdle ? Kirigami.Theme.disabledTextColor : Kirigami.Theme.positiveTextColor)
             }
 
             PlasmaComponents3.Label {
                 visible: !root.isIdle && !root.isPaused && root.liveWpm > 0
                 text: "• " + root.liveWpm + " WPM"
                 font.pixelSize: 11
-                color: "#22d3ee"
+                opacity: 0.8
             }
         }
 

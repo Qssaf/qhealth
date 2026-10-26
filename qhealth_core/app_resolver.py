@@ -1,8 +1,14 @@
 import os
 import glob
 import re
+import json
 import configparser
 from typing import Dict, Any, Optional
+
+from .paths import DATA_DIR, IS_WINDOWS
+
+# Windows has no .desktop files: apps are learned from their executables and remembered here
+LEARNED_APPS_FILE = DATA_DIR / "learned_apps.json"
 
 DESKTOP_DIRS = [
     os.path.expanduser("~/.local/share/applications"),
@@ -37,7 +43,10 @@ IDLE_APPS = {
     "desktop", "desktop / idle", "idle",
     "plasmashell", "org.kde.plasmashell", "plasma",
     "krunner", "org.kde.krunner", "kscreenlocker_greet",
-    "org.kde.kscreenlocker_greet", "lockscreen"
+    "org.kde.kscreenlocker_greet", "lockscreen",
+    # Windows: lock screen, Start / search, and the desktop & taskbar (window classes of explorer.exe)
+    "lockapp", "logonui", "searchhost", "searchapp", "startmenuexperiencehost", "shellexperiencehost",
+    "progman", "workerw", "shell_traywnd", "shell_secondarytraywnd",
 }
 
 class AppInfoResolver:
@@ -48,6 +57,7 @@ class AppInfoResolver:
             cls._instance = super(AppInfoResolver, cls).__new__(cls)
             cls._instance._apps_cache = {}
             cls._instance._resolved_cache = {}
+            cls._instance._learned = {}
             cls._instance._scan_desktop_files()
         return cls._instance
 
@@ -85,6 +95,34 @@ class AppInfoResolver:
                             self._apps_cache[base_id] = info
                 except Exception:
                     pass
+        if IS_WINDOWS:
+            try:
+                self._learned = json.loads(LEARNED_APPS_FILE.read_text(encoding="utf-8"))
+                self._apps_cache.update(self._learned)
+            except (OSError, ValueError):
+                self._learned = {}
+
+    def is_known(self, app_id: str) -> bool:
+        return app_id.lower().strip() in self._apps_cache
+
+    def register_app(self, app_id: str, display_name: str, icon: str):
+        """Remember an app seen at runtime (Windows: name from the exe's version info, icon = exe path)."""
+        key = app_id.lower().strip()
+        if not key or key in self._apps_cache:
+            return
+        name = display_name or key.replace("-", " ").replace("_", " ").title()
+        info = {"display_name": name, "icon": icon or key, "category": self._detect_category("", key, name), "desktop_id": key}
+        self._apps_cache[key] = info
+        self._learned[key] = info
+        for cached in [k for k in list(self._resolved_cache) if (k[0] or "").lower().strip() == key]:
+            self._resolved_cache.pop(cached, None)
+        if not IS_WINDOWS:
+            return  # elsewhere .desktop files are the catalogue; nothing to remember
+        try:
+            LEARNED_APPS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            LEARNED_APPS_FILE.write_text(json.dumps(self._learned, indent=1), encoding="utf-8")
+        except OSError:
+            pass
 
     def _detect_category(self, cats_raw: str, app_id: str, app_name: str) -> str:
         cats_set = {c.strip() for c in cats_raw.split(";") if c.strip()}
@@ -94,19 +132,22 @@ class AppInfoResolver:
                     return cat_name
         
         target = f"{app_id} {app_name}".lower()
-        if any(k in target for k in ["code", "cursor", "zed", "nvim", "konsole", "terminal", "idea", "pycharm", "opencode", "alacritty", "kitty"]):
+        if any(k in target for k in ["code", "cursor", "zed", "nvim", "konsole", "terminal", "idea", "pycharm", "opencode", "alacritty", "kitty",
+                                     "devenv", "powershell", "pwsh", "rider", "goland", "webstorm", "clion", "sublime"]):
             return "Development"
-        if any(k in target for k in ["steam", "game", "minecraft", "heroic", "lutris", "csgo", "cs2", "wine"]):
+        if any(k in target for k in ["steam", "game", "minecraft", "heroic", "lutris", "csgo", "cs2", "wine",
+                                     "epicgames", "battle.net", "riot", "valorant", "league", "galaxyclient"]):
             return "Gaming"
-        if any(k in target for k in ["firefox", "chrome", "chromium", "brave", "zen", "browser"]):
+        if any(k in target for k in ["firefox", "chrome", "chromium", "brave", "zen", "browser", "msedge", "opera", "vivaldi", "librewolf"]):
             return "Browsing"
-        if any(k in target for k in ["discord", "vesktop", "telegram", "slack", "element", "signal"]):
+        if any(k in target for k in ["discord", "vesktop", "telegram", "slack", "element", "signal", "teams", "whatsapp", "zoom", "outlook", "skype"]):
             return "Communication"
-        if any(k in target for k in ["spotify", "vlc", "mpv", "blender", "gimp", "inkscape", "obs", "davinci"]):
+        if any(k in target for k in ["spotify", "vlc", "mpv", "blender", "gimp", "inkscape", "obs", "davinci",
+                                     "photoshop", "premiere", "afterfx", "audacity", "itunes"]):
             return "Media & Design"
-        if any(k in target for k in ["obsidian", "notion", "office", "writer", "calc"]):
+        if any(k in target for k in ["obsidian", "notion", "office", "writer", "calc", "winword", "excel", "powerpnt", "onenote", "acrobat", "notepad"]):
             return "Productivity"
-        if any(k in target for k in ["settings", "dolphin", "system", "htop", "btop", "ark", "qhealth"]):
+        if any(k in target for k in ["settings", "dolphin", "system", "htop", "btop", "ark", "qhealth", "explorer", "taskmgr", "regedit"]):
             return "System"
         return "Other"
 
@@ -175,7 +216,7 @@ class AppInfoResolver:
             return res
 
         cleaned_parts = [p for p in re.split(r"[\.\-_/\s]+", f"{cleaned_id} {cleaned_cls}") if p]
-        for key, info in self._apps_cache.items():
+        for key, info in list(self._apps_cache.items()):  # copy: the Windows watcher may add apps concurrently
             key_last = key.split(".")[-1]
             if key_last and key_last not in {"desktop", "client", "app", "linux"}:
                 if key_last in cleaned_parts or key.endswith(f".{cleaned_id}") or (cleaned_cls and key.endswith(f".{cleaned_cls}")):

@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from .db import record_activity_chunk, record_input_heatmap_chunk, init_db
 from .app_resolver import app_resolver
-from .blocker import force_close_app, send_block_notification
+from .paths import DATA_DIR, IS_WINDOWS
+from .blocker import force_close_app, send_block_notification, send_focus_block_notification
 
 EVENT_STRUCT_FMT = "qqHHi"
 EVENT_SIZE = struct.calcsize(EVENT_STRUCT_FMT)
@@ -32,6 +33,12 @@ MOUSE_BUTTON_MAP = {
     276: "side2",
 }
 
+def input_access_ok() -> bool:
+    """False when input devices exist but none are readable (the user isn't in the `input` group)."""
+    devices = glob.glob("/dev/input/event*")
+    return not devices or any(os.access(d, os.R_OK) for d in devices)
+
+
 class ActivityTracker:
     def __init__(self):
         self.running = False
@@ -48,6 +55,11 @@ class ActivityTracker:
         self.blocked_app_details = {}
         self.blocked_app_ids = set()
         self._blocked_lock = threading.Lock()
+
+        # Focus session state
+        self.focus_session = {}
+        self.focus_allowed_ids = set()
+        self._focus_lock = threading.Lock()
 
         # Last external app (to display in Live card when QHealth is open)
         self.last_external_app_info = app_resolver.resolve("")
@@ -68,7 +80,7 @@ class ActivityTracker:
         self.chunk_mouse_buttons = collections.defaultdict(int)
         
         # Live sliding window metrics (last 10 seconds)
-        self.recent_events = [] # list of (timestamp, 'key'|'click')
+        self.recent_events = collections.deque() # (timestamp, 'key'|'click'|'scroll'), oldest first
         
         # Background worker threads
         self.input_thread = None
@@ -82,12 +94,11 @@ class ActivityTracker:
         self.last_flush_time = time.monotonic()
         self.last_input_time = time.monotonic()
         
-        # Start input listener
-        self.input_thread = threading.Thread(target=self._input_loop, daemon=True)
+        # Input listener + focused-window watcher: evdev & KWin on Linux, Raw Input & Win32 on Windows
+        input_loop, window_loop = (self._win_input_loop, self._win_window_loop) if IS_WINDOWS else (self._input_loop, self._kwin_loop)
+        self.input_thread = threading.Thread(target=input_loop, daemon=True)
         self.input_thread.start()
-        
-        # Start KWin window listener
-        self.kwin_thread = threading.Thread(target=self._kwin_loop, daemon=True)
+        self.kwin_thread = threading.Thread(target=window_loop, daemon=True)
         self.kwin_thread.start()
         
         # Start database aggregator
@@ -98,6 +109,8 @@ class ActivityTracker:
 
     def stop(self):
         self.running = False
+        if getattr(self, "_raw_input", None):
+            self._raw_input.stop()
         self._flush_chunk()
         print("[QHealth] Activity tracking engine stopped.")
 
@@ -141,11 +154,72 @@ class ActivityTracker:
                         return self.blocked_app_details.get(b_id)
         return None
 
+    def update_focus_session(self, session_data: Dict[str, Any]):
+        """Updates internal focus session allowlist and timers."""
+        with self._focus_lock:
+            self.focus_session = dict(session_data)
+            allowed = session_data.get("allowed_apps", [])
+            self.focus_allowed_ids = {a.lower().strip() for a in allowed if a}
+
+    def is_focus_session_active(self) -> bool:
+        with self._focus_lock:
+            if not self.focus_session.get("active"):
+                return False
+            end_time = float(self.focus_session.get("end_time", 0.0))
+            return time.time() < end_time
+
+    def is_app_allowed_in_focus(self, app_id: str, raw_app: str = "", raw_cls: str = "") -> bool:
+        """Returns True if the app is permitted under active focus session."""
+        with self._focus_lock:
+            if not self.focus_session.get("active"):
+                return True
+            if time.time() >= float(self.focus_session.get("end_time", 0.0)):
+                return True
+
+            from .blocker import is_immune
+            if is_immune(app_id) or is_immune(raw_app) or is_immune(raw_cls):
+                return True
+
+            candidates = {
+                (app_id or "").lower().strip(),
+                (raw_app or "").lower().strip(),
+                (raw_cls or "").lower().strip()
+            }
+            for c in list(candidates):
+                if c.endswith(".desktop"):
+                    candidates.add(c[:-8])
+
+            for cand in candidates:
+                if not cand:
+                    continue
+                if cand in self.focus_allowed_ids:
+                    return True
+                for allowed_id in self.focus_allowed_ids:
+                    if (cand == allowed_id or
+                        cand.endswith(f".{allowed_id}") or
+                        allowed_id.endswith(f".{cand}") or
+                        cand.startswith(f"{allowed_id}-") or
+                        allowed_id.startswith(f"{cand}-") or
+                        cand.startswith(f"{allowed_id}_") or
+                        allowed_id.startswith(f"{cand}_")):
+                        return True
+
+            res = app_resolver.resolve(raw_app, "", raw_cls)
+            res_id = res.get("app_id", "").lower().strip()
+            if res_id and res_id in self.focus_allowed_ids:
+                return True
+            for allowed_id in self.focus_allowed_ids:
+                if res_id and (res_id == allowed_id or res_id.endswith(f".{allowed_id}") or allowed_id.endswith(f".{res_id}")):
+                    return True
+
+            return False
+
     def get_live_metrics(self) -> Dict[str, Any]:
         now = time.monotonic()
         with self.input_lock:
-            self.recent_events = [e for e in self.recent_events if now - e[0] <= 10]
-            
+            while self.recent_events and now - self.recent_events[0][0] > 10:
+                self.recent_events.popleft()
+
             keys_last_10s = sum(1 for e in self.recent_events if e[1] == 'key')
             clicks_last_10s = sum(1 for e in self.recent_events if e[1] == 'click')
             
@@ -163,6 +237,13 @@ class ActivityTracker:
                 app_info = dict(self.resolved_app_info)
                 active_title = self.current_title
 
+        with self._focus_lock:
+            focus_active = (bool(self.focus_session.get("active", False)) and
+                            time.time() < float(self.focus_session.get("end_time", 0.0)))
+            rem_secs = max(0, int(float(self.focus_session.get("end_time", 0.0)) - time.time())) if focus_active else 0
+            focus_dur = self.focus_session.get("duration_minutes", 0)
+            focus_allowed = sorted(list(self.focus_allowed_ids))
+
         return {
             "active_app": app_info.get("display_name", "Desktop / Idle"),
             "app_id": app_info.get("app_id", ""),
@@ -174,7 +255,11 @@ class ActivityTracker:
             "live_cpm": live_cpm,
             "is_idle": idle_state,
             "is_paused": self.paused,
-            "seconds_since_input": int(now - self.last_input_time)
+            "seconds_since_input": int(now - self.last_input_time),
+            "focus_active": focus_active,
+            "focus_remaining_seconds": rem_secs,
+            "focus_duration_minutes": focus_dur,
+            "focus_allowed_apps": focus_allowed
         }
 
     def _input_loop(self):
@@ -214,32 +299,27 @@ class ActivityTracker:
 
             rlist = list(opened_fds.values())
             try:
-                readable, _, _ = select.select(rlist, [], [], 0.5)
+                # Sleep in the kernel until input arrives; wake at most every 5 s for hot-plug rescans
+                readable, _, _ = select.select(rlist, [], [], 5.0)
             except Exception:
                 time.sleep(0.1)
                 continue
 
             for fd in readable:
                 try:
-                    data = os.read(fd, EVENT_SIZE * 32)
-                    if not data:
+                    data = os.read(fd, EVENT_SIZE * 64)
+                    if not data or self.paused:
                         continue
-                    
-                    event_count = len(data) // EVENT_SIZE
-                    for i in range(event_count):
-                        chunk = data[i * EVENT_SIZE : (i + 1) * EVENT_SIZE]
-                        sec, usec, ev_type, ev_code, ev_val = struct.unpack(EVENT_STRUCT_FMT, chunk)
-                        
-                        if self.paused:
-                            continue
 
-                        cur_time = time.monotonic()
-                        if ev_type == EV_KEY:
-                            if ev_val in (1, 2): # Key down or key repeat
-                                with self.input_lock:
+                    usable = len(data) - len(data) % EVENT_SIZE
+                    cur_time = time.monotonic()
+                    # One lock acquisition per read() batch instead of one per event
+                    with self.input_lock:
+                        for _sec, _usec, ev_type, ev_code, ev_val in struct.iter_unpack(EVENT_STRUCT_FMT, data[:usable]):
+                            if ev_type == EV_KEY:
+                                if ev_val in (1, 2): # Key down or key repeat
                                     self.last_input_time = cur_time
-                            if ev_val == 1: # Single discrete press
-                                with self.input_lock:
+                                if ev_val == 1: # Single discrete press
                                     if ev_code >= 0x110 and ev_code <= 0x117: # Mouse button
                                         btn_name = MOUSE_BUTTON_MAP.get(ev_code, "other")
                                         self.chunk_mouse_buttons[btn_name] += 1
@@ -249,8 +329,7 @@ class ActivityTracker:
                                         self.chunk_key_codes[ev_code] += 1
                                         self.chunk_keystrokes += 1
                                         self.recent_events.append((cur_time, 'key'))
-                        elif ev_type == EV_REL and (ev_code == REL_WHEEL or ev_code == REL_HWHEEL):
-                            with self.input_lock:
+                            elif ev_type == EV_REL and (ev_code == REL_WHEEL or ev_code == REL_HWHEEL):
                                 self.last_input_time = cur_time
                                 self.chunk_scrolls += 1
                                 self.recent_events.append((cur_time, 'scroll'))
@@ -271,6 +350,65 @@ class ActivityTracker:
                 os.close(fd)
             except:
                 pass
+
+    def _win_input_loop(self):
+        """Windows: physical keyboard / mouse events via Raw Input (same counters as the evdev loop)."""
+        from .win32 import RawInputListener
+
+        def on_key(code, repeat):
+            if self.paused:
+                return
+            now = time.monotonic()
+            with self.input_lock:
+                self.last_input_time = now
+                if not repeat and code is not None:
+                    self.chunk_key_codes[code] += 1
+                    self.chunk_keystrokes += 1
+                    self.recent_events.append((now, 'key'))
+
+        def on_click(button):
+            if self.paused:
+                return
+            now = time.monotonic()
+            with self.input_lock:
+                self.last_input_time = now
+                self.chunk_mouse_buttons[button] += 1
+                self.chunk_clicks += 1
+                self.recent_events.append((now, 'click'))
+
+        def on_scroll():
+            if self.paused:
+                return
+            now = time.monotonic()
+            with self.input_lock:
+                self.last_input_time = now
+                self.chunk_scrolls += 1
+                self.recent_events.append((now, 'scroll'))
+
+        self._raw_input = RawInputListener(on_key, on_click, on_scroll)
+        self._raw_input.run()
+
+    def _win_window_loop(self):
+        """Windows: poll the foreground window once a second (title changes included, e.g. browser tabs)."""
+        from . import win32
+        last = None
+        while self.running:
+            try:
+                fg = win32.foreground_window()
+                if fg != last:
+                    last = fg
+                    if fg is None:
+                        self._handle_focus("", "", "", 0)
+                    else:
+                        pid, title, cls = fg
+                        path = win32.process_path(pid)
+                        app_id = "qhealth" if pid == os.getpid() else win32.exe_stem(path)
+                        if app_id != "qhealth" and path and not app_resolver.is_known(app_id):
+                            app_resolver.register_app(app_id, win32.file_description(path), path)
+                        self._handle_focus(app_id, title, cls, pid)
+            except Exception:
+                pass
+            time.sleep(1.0)
 
     def _inject_kwin_script(self) -> bool:
         """Injects or reloads the active focus monitor in KWin."""
@@ -319,7 +457,9 @@ class ActivityTracker:
         }
         hookActive();
         """
-        script_path = f"/tmp/qhealth_kwin_{os.getuid()}.js"
+        state_dir = DATA_DIR
+        state_dir.mkdir(parents=True, exist_ok=True)
+        script_path = str(state_dir / f"kwin_script_{os.getuid()}.js")
         try:
             with open(script_path, "w") as f:
                 f.write(kwin_script)
@@ -347,23 +487,22 @@ class ActivityTracker:
 
     def _kwin_loop(self):
         """Integrates with KDE Plasma 6 KWin via Scripting and journalctl with auto-boot retry."""
-        # Retry injection until KWin is ready on DBus (handles cold PC boot)
-        while self.running:
-            if self._inject_kwin_script():
-                break
-            time.sleep(2.0)
-
-        last_check = time.time()
         while self.running:
             proc = None
             try:
+                # Follow the journal from just before (re)injecting: the script reports the already-focused
+                # window the moment it loads, and that line used to be missed until the next focus change.
+                since = f"@{int(time.time()) - 1}"
                 proc = subprocess.Popen(
-                    ["journalctl", "--user", "-u", "plasma-kwin_wayland.service", "-f", "-n", "0", "-o", "cat"],
+                    ["journalctl", "--user", "-u", "plasma-kwin_wayland.service", "-f", "--since", since, "-o", "cat"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
                     text=True
                 )
-                
+                # Retry injection until KWin is ready on DBus (handles cold PC boot)
+                while self.running and not self._inject_kwin_script():
+                    time.sleep(2.0)
+
                 for line in iter(proc.stdout.readline, ''):
                     if not self.running:
                         break
@@ -377,39 +516,7 @@ class ActivityTracker:
                             raw_cls = data.get("cls", "")
                             pid = int(data.get("pid", 0) or 0)
                             
-                            resolved = app_resolver.resolve(raw_app, raw_title, raw_cls)
-                            is_qhealth = (
-                                "qhealth" in raw_app.lower() or
-                                "qhealth" in raw_cls.lower() or
-                                resolved.get("app_id") == "qhealth"
-                            )
-
-                            # Check if the focused app is exceeded and blocked
-                            blocked_info = self.is_app_blocked(resolved.get("app_id", ""), raw_app, raw_cls)
-                            if blocked_info and not is_qhealth:
-                                target_id = resolved.get("app_id", raw_app)
-                                app_name = resolved.get("display_name", raw_app or "Application")
-                                limit_mins = blocked_info.get("daily_limit_minutes", 0)
-                                force_close_app(target_id, app_name, pid)
-                                send_block_notification(app_name, limit_mins, target_id, is_reopen=True)
-
-                                with self.window_lock:
-                                    self.current_raw_app = ""
-                                    self.current_title = ""
-                                    self.current_class = ""
-                                    self.current_pid = 0
-                                    self.resolved_app_info = app_resolver.resolve("")
-                                continue
-                            
-                            with self.window_lock:
-                                self.current_raw_app = raw_app
-                                self.current_title = raw_title
-                                self.current_class = raw_cls
-                                self.current_pid = pid
-                                self.resolved_app_info = resolved
-                                if not is_qhealth and resolved.get("is_active_window", False):
-                                    self.last_external_app_info = resolved
-                                    self.last_external_title = raw_title
+                            self._handle_focus(raw_app, raw_title, raw_cls, pid)
                         except Exception:
                             pass
             except Exception:
@@ -423,7 +530,61 @@ class ActivityTracker:
                         pass
                 if self.running:
                     time.sleep(2.0)
-                    self._inject_kwin_script()
+
+    def _handle_focus(self, raw_app: str, raw_title: str, raw_cls: str, pid: int):
+        """A window gained focus (or its title changed): enforce focus sessions / budgets, then track it."""
+        resolved = app_resolver.resolve(raw_app, raw_title, raw_cls)
+        is_qhealth = (
+            "qhealth" in raw_app.lower() or
+            "qhealth" in raw_cls.lower() or
+            resolved.get("app_id") == "qhealth"
+        )
+
+        # Check Focus Session enforcement
+        if self.is_focus_session_active() and not is_qhealth:
+            target_id = resolved.get("app_id", raw_app)
+            app_name = resolved.get("display_name", raw_app or "Application")
+            if not self.is_app_allowed_in_focus(target_id, raw_app, raw_cls):
+                with self._focus_lock:
+                    rem_secs = max(0, int(float(self.focus_session.get("end_time", 0.0)) - time.time()))
+                rem_mins = max(1, (rem_secs + 59) // 60)
+                force_close_app(target_id, app_name, pid)
+                send_focus_block_notification(app_name, target_id, rem_mins)
+
+                with self.window_lock:
+                    self.current_raw_app = ""
+                    self.current_title = ""
+                    self.current_class = ""
+                    self.current_pid = 0
+                    self.resolved_app_info = app_resolver.resolve("")
+                return
+
+        # Check if the focused app is exceeded and blocked
+        blocked_info = self.is_app_blocked(resolved.get("app_id", ""), raw_app, raw_cls)
+        if blocked_info and not is_qhealth:
+            target_id = resolved.get("app_id", raw_app)
+            app_name = resolved.get("display_name", raw_app or "Application")
+            limit_mins = blocked_info.get("daily_limit_minutes", 0)
+            force_close_app(target_id, app_name, pid)
+            send_block_notification(app_name, limit_mins, target_id, is_reopen=True)
+
+            with self.window_lock:
+                self.current_raw_app = ""
+                self.current_title = ""
+                self.current_class = ""
+                self.current_pid = 0
+                self.resolved_app_info = app_resolver.resolve("")
+            return
+
+        with self.window_lock:
+            self.current_raw_app = raw_app
+            self.current_title = raw_title
+            self.current_class = raw_cls
+            self.current_pid = pid
+            self.resolved_app_info = resolved
+            if not is_qhealth and resolved.get("is_active_window", False):
+                self.last_external_app_info = resolved
+                self.last_external_title = raw_title
 
     def _flush_chunk(self):
         now = time.monotonic()
@@ -441,7 +602,8 @@ class ActivityTracker:
             self.chunk_mouse_buttons.clear()
 
             # Prevent unbounded recent_events growth over long 24/7 runs
-            self.recent_events = [e for e in self.recent_events if now - e[0] <= 12]
+            while self.recent_events and now - self.recent_events[0][0] > 12:
+                self.recent_events.popleft()
 
         with self.window_lock:
             app_info = dict(self.resolved_app_info)

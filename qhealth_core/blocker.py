@@ -1,9 +1,13 @@
 import os
 import time
 import signal
-import subprocess
-from pathlib import Path
 from typing import Set, List, Optional, Dict, Any
+
+from . import notify
+from .paths import IS_WINDOWS
+
+if IS_WINDOWS:
+    from . import win32
 
 # System-critical apps and desktop components that must NEVER be killed
 IMMUNE_APP_IDS: Set[str] = {
@@ -19,6 +23,8 @@ IMMUNE_APP_IDS: Set[str] = {
     "lockscreen",
     "systemsettings",
     "org.kde.systemsettings",
+    "spectacle",
+    "org.kde.spectacle",
     "opencode",
     "ai.opencode.desktop",
     "ai.opencode",
@@ -28,9 +34,17 @@ IMMUNE_APP_IDS: Set[str] = {
     "konsole",
     "alacritty",
     "kitty",
+    "wezterm",
+    "gnome-terminal",
+    "foot",
+    "xterm",
+    "tmux",
+    "ssh",
     "bash",
     "zsh",
     "fish",
+    "sh",
+    "polkit-kde-authentication-agent-1",
 }
 
 IMMUNE_EXEC_NAMES: Set[str] = {
@@ -41,13 +55,32 @@ IMMUNE_EXEC_NAMES: Set[str] = {
     "plasmashell",
     "krunner",
     "systemsettings",
+    "spectacle",
     "dbus-daemon",
     "dbus-broker",
     "pipewire",
     "wireplumber",
     "xdg-desktop-portal",
     "xdg-desktop-portal-kde",
+    "xwayland",
+    "journalctl",
+    "polkitd",
+    "polkit-kde-authentication-agent-1",
+    "ssh-agent",
+    "gpg-agent",
+    "tmux",
 }
+
+# Windows shell / session processes (and terminals, like konsole above) that must never be closed
+IMMUNE_WINDOWS: Set[str] = {
+    "explorer", "dwm", "csrss", "winlogon", "wininit", "lsass", "services", "smss", "svchost", "sihost",
+    "taskmgr", "conhost", "ctfmon", "fontdrvhost", "runtimebroker", "searchhost", "searchapp",
+    "startmenuexperiencehost", "shellexperiencehost", "applicationframehost", "textinputhost", "lockapp",
+    "logonui", "securityhealthsystray", "windowsterminal", "openconsole", "cmd", "powershell", "pwsh",
+    "python", "pythonw",
+}
+IMMUNE_APP_IDS |= IMMUNE_WINDOWS
+IMMUNE_EXEC_NAMES |= IMMUNE_WINDOWS
 
 _last_notification_time: Dict[str, float] = {}
 
@@ -69,18 +102,21 @@ def is_immune(app_id: str, app_name: str = "", pid: Optional[int] = None) -> boo
     if app_lower in IMMUNE_APP_IDS or name_lower in IMMUNE_APP_IDS:
         return True
 
-    for imm in ("qhealth", "plasmashell", "kwin", "krunner", "opencode", "systemsettings"):
+    for imm in ("qhealth", "plasmashell", "kwin", "krunner", "opencode", "systemsettings", "spectacle", "konsole", "kitty", "alacritty"):
         if imm in app_lower or imm in name_lower:
             return True
 
     if pid is not None:
         if pid <= 100 or pid == os.getpid() or pid == os.getppid():
             return True
+        if IS_WINDOWS:
+            exe = win32.process_name(pid)
+            return exe in IMMUNE_EXEC_NAMES or "qhealth" in exe
         try:
             # Check process command line
             with open(f"/proc/{pid}/cmdline", "rb") as f:
                 cmdline = f.read().decode("utf-8", errors="ignore").lower()
-                for imm in ("qhealth", "opencode", "kwin", "plasmashell", "systemsettings"):
+                for imm in ("qhealth", "opencode", "kwin", "plasmashell", "systemsettings", "spectacle"):
                     if imm in cmdline:
                         return True
 
@@ -114,11 +150,14 @@ def get_process_tree(root_pid: int) -> List[int]:
         return []
 
     children = {}
+    uid = os.getuid()
     try:
         for entry in os.listdir("/proc"):
             if entry.isdigit():
                 p = int(entry)
                 try:
+                    if os.stat(f"/proc/{p}").st_uid != uid:
+                        continue
                     with open(f"/proc/{p}/stat", "r") as f:
                         fields = f.read().split()
                         ppid = int(fields[3])
@@ -190,9 +229,9 @@ def find_pids_for_app(app_id: str) -> List[int]:
                 matches = False
                 if cleaned_id == comm or cleaned_id == exec_base:
                     matches = True
-                elif cleaned_id in exec_path and not any(g == comm for g in GENERIC_TOKENS):
+                elif len(cleaned_id) >= 4 and cleaned_id not in GENERIC_TOKENS and (f"/{cleaned_id}" in exec_path or exec_path.endswith(cleaned_id)):
                     matches = True
-                elif any(t == comm or t == exec_base or (t in comm and len(t) >= 5) for t in tokens):
+                elif any(t == comm or t == exec_base for t in tokens):
                     matches = True
 
                 if matches and not is_immune(cleaned_id, comm, p):
@@ -203,6 +242,52 @@ def find_pids_for_app(app_id: str) -> List[int]:
         pass
 
     return matched_pids
+
+
+if IS_WINDOWS:
+    # Windows has no /proc: the same three helpers, built on a Toolhelp process snapshot
+
+    def is_process_running(pid: int) -> bool:
+        return win32.process_alive(pid)
+
+    def get_process_tree(root_pid: int) -> List[int]:
+        if root_pid <= 100 or is_immune("", "", root_pid):
+            return []
+        procs = win32.processes()
+        root_name = next((name for p, _, name in procs if p == root_pid), "")
+        if not root_name:
+            return []
+        # Only same-exe children: Windows recycles PIDs, so a stale parent id must not drag in unrelated programs
+        children: Dict[int, List[int]] = {}
+        for p, parent, name in procs:
+            if name == root_name:
+                children.setdefault(parent, []).append(p)
+        tree, queue, seen = [], [root_pid], set()
+        while queue:
+            curr = queue.pop(0)
+            if curr in seen:
+                continue
+            seen.add(curr)
+            if not is_immune("", "", curr):
+                tree.append(curr)
+                queue.extend(children.get(curr, []))
+        return tree
+
+    def find_pids_for_app(app_id: str) -> List[int]:
+        cleaned_id = (app_id or "").lower().strip()
+        if cleaned_id.endswith(".exe"):
+            cleaned_id = cleaned_id[:-4]
+        if not cleaned_id or is_immune(cleaned_id):
+            return []
+        raw_tokens = cleaned_id.replace(".", " ").replace("-", " ").replace("_", " ").split()
+        tokens = {t for t in raw_tokens if len(t) >= 4 and t not in GENERIC_TOKENS}
+        return [p for p, _, name in win32.processes()
+                if p != os.getpid() and name not in IMMUNE_EXEC_NAMES and (name == cleaned_id or name in tokens)]
+
+
+def running_gui_apps() -> List[tuple]:
+    """(pid, name) of apps with a window open right now. Linux callers use /proc; this is the Windows view."""
+    return win32.gui_processes() if IS_WINDOWS else []
 
 
 def force_close_app(app_id: str, app_name: str = "", pid: Optional[int] = None) -> int:
@@ -235,20 +320,26 @@ def force_close_app(app_id: str, app_name: str = "", pid: Optional[int] = None) 
     if not filtered_pids:
         return 0
 
-    # Step 1: Send SIGTERM
-    for p in filtered_pids:
-        try:
-            os.kill(p, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
+    # Step 1: Ask politely (SIGTERM / WM_CLOSE)
+    if IS_WINDOWS:
+        win32.close_windows(set(filtered_pids))
+    else:
+        for p in filtered_pids:
+            try:
+                os.kill(p, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
 
     # Step 2: Brief pause for graceful teardown
     time.sleep(0.15)
 
-    # Step 3: Check remaining living processes and SIGKILL
+    # Step 3: Check remaining living processes and force-kill (SIGKILL / TerminateProcess)
     terminated_count = 0
     for p in filtered_pids:
         if is_process_running(p):
+            if IS_WINDOWS:
+                terminated_count += win32.terminate(p)
+                continue
             try:
                 os.kill(p, signal.SIGKILL)
                 terminated_count += 1
@@ -276,15 +367,30 @@ def send_block_notification(app_name: str, limit_mins: int, app_id: str, is_reop
     else:
         msg = f"{app_name} daily limit ({limit_mins}m) reached. Force closing application."
 
-    try:
-        icon_path = str(Path.home() / ".local" / "share" / "icons" / "qhealth.svg")
-        subprocess.run([
-            "notify-send",
-            "-a", "QHealth",
-            "-i", icon_path if os.path.exists(icon_path) else "qhealth",
-            "-u", "critical",
-            title,
-            msg
-        ], timeout=3)
-    except Exception:
-        pass
+    notify.send(title, msg, critical=True)
+
+
+def send_focus_block_notification(app_name: str, app_id: str, remaining_mins: int):
+    """
+    Sends desktop notification when an app is force-closed during an active focus session.
+    Rate-limited to at most once every 6 seconds per app.
+    """
+    now = time.time()
+    notif_key = f"focus_{app_id.lower().strip()}"
+    last_time = _last_notification_time.get(notif_key, 0.0)
+    if now - last_time < 6.0:
+        return
+
+    _last_notification_time[notif_key] = now
+    title = "QHealth — Focus Session Active"
+    msg = f"{app_name} is blocked during your focus session ({remaining_mins}m remaining)."
+
+    notify.send(title, msg, critical=True)
+
+
+def send_focus_complete_notification(duration_mins: int):
+    """Sends desktop notification when a focus session finishes."""
+    title = "QHealth — Focus Session Complete! 🎯"
+    msg = f"Great work! You finished your {duration_mins}-minute focus session."
+
+    notify.send(title, msg, critical=False)

@@ -1,0 +1,40 @@
+# Maintainer: Qssaf
+#
+# Build & install from a release tag:   cd packaging/arch && makepkg -si
+# For a local checkout before tagging, see the README ("Arch / CachyOS package").
+pkgname=qhealth
+pkgver=3.0.0
+pkgrel=1
+pkgdesc="Offline screen time, app usage and input activity tracker for KDE Plasma"
+arch=('any')
+url="https://github.com/Qssaf/qhealth"
+license=('MIT')
+depends=('python' 'python-pyqt6' 'qt6-svg' 'libnotify' 'systemd' 'kwin')
+optdepends=('plasma-workspace: QHealth panel widget')
+makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+install=qhealth.install
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')  # run `updpkgsums` after tagging v$pkgver
+
+build() {
+    cd "$pkgname-$pkgver"
+    python -m build --wheel --no-isolation
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    QT_QPA_PLATFORM=offscreen python test_suite.py
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    python -m installer --destdir="$pkgdir" dist/*.whl
+
+    install -Dm644 packaging/linux/qhealth.desktop "$pkgdir/usr/share/applications/qhealth.desktop"
+    install -Dm644 packaging/linux/qhealth.metainfo.xml "$pkgdir/usr/share/metainfo/qhealth.metainfo.xml"
+    install -Dm644 packaging/linux/qhealth.service "$pkgdir/usr/lib/systemd/user/qhealth.service"
+    install -Dm644 assets/qhealth.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/qhealth.svg"
+    install -dm755 "$pkgdir/usr/share/plasma/plasmoids"
+    cp -r plasma_plasmoid/org.kde.plasma.qhealth "$pkgdir/usr/share/plasma/plasmoids/"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

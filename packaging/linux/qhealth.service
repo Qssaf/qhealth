@@ -1,0 +1,18 @@
+[Unit]
+Description=QHealth screen time and activity tracking daemon
+Documentation=https://github.com/Qssaf/qhealth
+# Needs the Plasma session (KWin scripting + journal) to be up
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/qhealth --daemon
+Restart=on-failure
+RestartSec=3
+# Background bookkeeping: never compete with interactive work
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=graphical-session.target

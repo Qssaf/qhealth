@@ -1,126 +1,198 @@
+from pathlib import Path
+from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtWidgets import QApplication
+from . import theme as t
+
+UI_ASSETS = (Path(__file__).resolve().parent / "assets" / "ui").as_posix()  # shipped as package data
+
+
 def get_qhealth_stylesheet() -> str:
-    return """
-    QMainWindow {
-        background-color: #07090e;
-        color: #f1f5f9;
-    }
+    mono = t.first_family(t.FONT_MONO)
+    accent_soft = t.rgba(t.ACCENT, 0.14)
+    accent_line = t.rgba(t.ACCENT, 0.40)
+    return f"""
+    * {{ outline: none; }}
+    QMainWindow, QDialog {{ background: {t.CANVAS}; }}
+    QWidget {{ color: {t.TEXT}; font-size: 13px; }}
+    QLabel {{ background: transparent; border: none; }}
 
-    QWidget {
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        font-size: 13px;
-        color: #e2e8f0;
-    }
+    /* ---------- Surfaces ---------- */
+    QFrame.Sidebar {{ background: {t.SIDEBAR}; border: none; border-right: 1px solid {t.BORDER}; }}
+    QFrame.Card {{ background: {t.SURFACE}; border: 1px solid {t.BORDER}; border-radius: 14px; }}
+    QFrame.Tile {{ background: {t.RAISED}; border: 1px solid {t.BORDER}; border-radius: 10px; }}
+    QFrame.Segmented {{ background: {t.RAISED}; border: 1px solid {t.BORDER}; border-radius: 9px; }}
+    QFrame.Divider {{ background: {t.BORDER}; border: none; max-height: 1px; min-height: 1px; }}
+    QFrame.Row {{ background: {t.RAISED}; border: 1px solid transparent; border-radius: 10px; }}
+    QFrame.Row:hover {{ background: {t.HOVER}; border-color: {t.BORDER_STRONG}; }}
+    QFrame.Row:focus {{ border-color: {t.ACCENT}; }}
+    QFrame.Row[selected="true"] {{ background: {accent_soft}; border-color: {accent_line}; }}
+    QFrame.Static {{ background: {t.RAISED}; border: 1px solid transparent; border-radius: 10px; }}
 
-    QScrollArea {
-        border: none;
-        background-color: transparent;
-    }
+    /* ---------- Type roles ---------- */
+    QLabel[role="brand"] {{ font-size: 16px; font-weight: 700; }}
+    QLabel[role="h1"] {{ font-size: 20px; font-weight: 600; }}
+    QLabel[role="h2"] {{ font-size: 15px; font-weight: 600; }}
+    QLabel[role="h3"] {{ font-size: 13px; font-weight: 600; }}
+    QLabel[role="body"] {{ color: {t.TEXT_2}; }}
+    QLabel[role="caption"] {{ font-size: 12px; color: {t.TEXT_3}; }}
+    QLabel[role="overline"] {{ font-size: 11px; font-weight: 600; color: {t.TEXT_3}; }}
+    QLabel[role="metric"] {{ font-size: 24px; font-weight: 600; }}
+    QLabel[role="metric-sm"] {{ font-size: 18px; font-weight: 600; }}
+    QLabel[role="live"] {{ font-family: "{mono}"; font-size: 20px; font-weight: 600; }}
+    QLabel[role="clock"] {{ font-family: "{mono}"; font-size: 52px; font-weight: 600; }}
+    QLabel[role="mono"] {{ font-family: "{mono}"; font-size: 12px; color: {t.TEXT_2}; }}
+    QLabel[role="mono-strong"] {{ font-family: "{mono}"; font-size: 13px; font-weight: 600; }}
+    QLabel[role="empty"] {{ font-size: 12px; color: {t.TEXT_3}; padding: 20px; }}
+    QLabel[role="badge"] {{
+        font-size: 11px; font-weight: 600; color: {t.TEXT_2};
+        background: {t.RAISED}; border: 1px solid {t.BORDER}; border-radius: 9px; padding: 2px 8px;
+    }}
+    QLabel[role="badge"][tone="good"] {{ color: {t.GOOD}; background: {t.rgba(t.GOOD, 0.10)}; border-color: {t.rgba(t.GOOD, 0.28)}; }}
+    QLabel[role="badge"][tone="warn"] {{ color: {t.WARN}; background: {t.rgba(t.WARN, 0.10)}; border-color: {t.rgba(t.WARN, 0.28)}; }}
+    QLabel[role="badge"][tone="bad"] {{ color: {t.BAD}; background: {t.rgba(t.BAD, 0.10)}; border-color: {t.rgba(t.BAD, 0.28)}; }}
+    QLabel[role="badge"][tone="accent"] {{ color: {t.ACCENT}; background: {accent_soft}; border-color: {t.rgba(t.ACCENT, 0.30)}; }}
+    QLabel[role="banner"] {{
+        color: {t.TEXT}; background: {t.rgba(t.BAD, 0.10)}; border: 1px solid {t.rgba(t.BAD, 0.30)};
+        border-radius: 10px; padding: 8px 12px;
+    }}
+    QLabel[role="banner"][tone="warn"] {{ background: {t.rgba(t.WARN, 0.08)}; border-color: {t.rgba(t.WARN, 0.28)}; }}
+    QLabel[role="status"] {{ font-size: 12px; color: {t.TEXT_2}; }}
+    QLabel[role="status"][tone="good"] {{ color: {t.GOOD}; }}
+    QLabel[role="status"][tone="warn"] {{ color: {t.WARN}; }}
 
-    QScrollBar:vertical {
-        border: none;
-        background: rgba(15, 23, 42, 0.4);
-        width: 6px;
-        margin: 0px;
-        border-radius: 3px;
-    }
+    /* ---------- Buttons ---------- */
+    QPushButton {{
+        background: {t.RAISED}; color: {t.TEXT}; border: 1px solid {t.BORDER};
+        border-radius: 8px; padding: 6px 12px; font-weight: 500;
+    }}
+    QPushButton:hover {{ background: {t.HOVER}; border-color: {t.BORDER_STRONG}; }}
+    QPushButton:pressed {{ background: {t.RAISED}; }}
+    QPushButton:focus {{ border-color: {t.ACCENT}; }}
+    QPushButton:checked {{ background: {accent_soft}; border-color: {accent_line}; }}
+    QPushButton:disabled {{ color: {t.TEXT_4}; background: transparent; border-color: {t.BORDER}; }}
+    QPushButton[active="true"] {{ background: {accent_soft}; border-color: {accent_line}; color: {t.TEXT}; }}
 
-    QScrollBar::handle:vertical {
-        background: rgba(255, 255, 255, 0.15);
-        min-height: 20px;
-        border-radius: 3px;
-    }
+    QPushButton.Primary {{ background: {t.ACCENT}; color: {t.ON_ACCENT}; border: 1px solid {t.ACCENT}; font-weight: 600; padding: 8px 16px; }}
+    QPushButton.Primary:hover {{ background: {t.ACCENT_HOVER}; border-color: {t.ACCENT_HOVER}; }}
+    QPushButton.Primary:pressed {{ background: {t.ACCENT_PRESS}; border-color: {t.ACCENT_PRESS}; }}
+    QPushButton.Primary:focus {{ border-color: {t.TEXT}; }}
 
-    QScrollBar::handle:vertical:hover {
-        background: rgba(56, 189, 248, 0.4);
-    }
+    QPushButton.Ghost {{ background: transparent; border-color: transparent; color: {t.TEXT_2}; }}
+    QPushButton.Ghost:hover {{ background: {t.RAISED}; color: {t.TEXT}; }}
+    QPushButton.Ghost:focus {{ border-color: {t.ACCENT}; }}
 
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-        height: 0px;
-    }
+    QPushButton.Danger {{ background: {t.rgba(t.BAD, 0.12)}; color: {t.BAD}; border-color: {t.rgba(t.BAD, 0.35)}; }}
+    QPushButton.Danger:hover {{ background: {t.rgba(t.BAD, 0.22)}; color: {t.TEXT}; }}
 
-    QFrame.GlassCard {
-        background-color: rgba(13, 18, 29, 0.85);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 14px;
-    }
+    QPushButton.Nav {{
+        background: transparent; border: 1px solid transparent; border-radius: 8px;
+        padding: 8px 10px; text-align: left; color: {t.TEXT_2}; font-weight: 500;
+    }}
+    QPushButton.Nav:hover {{ background: {t.RAISED}; color: {t.TEXT}; }}
+    QPushButton.Nav:checked {{ background: {t.rgba(t.ACCENT, 0.12)}; border-color: {t.rgba(t.ACCENT, 0.22)}; color: {t.TEXT}; }}
+    QPushButton.Nav:focus {{ border-color: {t.ACCENT}; }}
 
-    QFrame.GlassCardInner {
-        background-color: rgba(15, 23, 42, 0.55);
-        border: 1px solid rgba(255, 255, 255, 0.07);
-        border-radius: 10px;
-    }
+    QPushButton.Segment {{
+        background: transparent; border: 1px solid transparent; border-radius: 6px;
+        padding: 5px 12px; color: {t.TEXT_2}; font-weight: 500;
+    }}
+    QPushButton.Segment:hover {{ color: {t.TEXT}; background: transparent; }}
+    QPushButton.Segment:checked {{ background: {t.HOVER}; border-color: {t.BORDER_STRONG}; color: {t.TEXT}; }}
+    QPushButton.Segment:focus {{ border-color: {t.ACCENT}; }}
 
-    QFrame.GlassCardInner:hover {
-        border-color: rgba(56, 189, 248, 0.35);
-        background-color: rgba(18, 28, 48, 0.7);
-    }
+    QPushButton.Icon {{ padding: 0px; }}
 
-    QPushButton.TabBtn {
-        background-color: transparent;
-        color: #94a3b8;
-        border: 1px solid transparent;
-        border-radius: 8px;
-        padding: 5px 12px;
-        font-weight: 600;
-        font-size: 12px;
-    }
+    /* ---------- Inputs ---------- */
+    QLineEdit, QComboBox, QSpinBox {{
+        background: {t.RAISED}; color: {t.TEXT}; border: 1px solid {t.BORDER};
+        border-radius: 8px; padding: 6px 10px;
+        selection-background-color: {t.rgba(t.ACCENT, 0.35)}; selection-color: {t.TEXT};
+    }}
+    QLineEdit:hover, QComboBox:hover, QSpinBox:hover {{ border-color: {t.BORDER_STRONG}; }}
+    QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color: {t.ACCENT}; }}
+    QComboBox {{ padding-right: 28px; }}
+    QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: center right; width: 26px; border: none; }}
+    QComboBox::down-arrow {{ image: url({UI_ASSETS}/chevron-down.svg); width: 12px; height: 12px; }}
+    QComboBox QAbstractItemView {{
+        background: {t.OVERLAY}; color: {t.TEXT}; border: 1px solid {t.BORDER_STRONG};
+        border-radius: 8px; padding: 4px; selection-background-color: {t.HOVER}; selection-color: {t.TEXT};
+    }}
+    QSpinBox {{ padding-right: 22px; font-weight: 600; }}
+    QSpinBox::up-button, QSpinBox::down-button {{ subcontrol-origin: border; width: 20px; border: none; background: transparent; }}
+    QSpinBox::up-button {{ subcontrol-position: top right; }}
+    QSpinBox::down-button {{ subcontrol-position: bottom right; }}
+    QSpinBox::up-arrow {{ image: url({UI_ASSETS}/chevron-up.svg); width: 10px; height: 10px; }}
+    QSpinBox::down-arrow {{ image: url({UI_ASSETS}/chevron-down.svg); width: 10px; height: 10px; }}
 
-    QPushButton.TabBtn:hover {
-        color: #38bdf8;
-        background-color: rgba(56, 189, 248, 0.08);
-        border: 1px solid rgba(56, 189, 248, 0.2);
-    }
+    QCheckBox {{ spacing: 8px; color: {t.TEXT_2}; }}
+    QCheckBox:hover {{ color: {t.TEXT}; }}
+    QCheckBox::indicator {{ width: 16px; height: 16px; border-radius: 5px; border: 1px solid {t.BORDER_STRONG}; background: {t.RAISED}; }}
+    QCheckBox::indicator:hover, QCheckBox::indicator:focus {{ border-color: {t.ACCENT}; }}
+    QCheckBox::indicator:checked {{ background: {t.ACCENT}; border-color: {t.ACCENT}; image: url({UI_ASSETS}/check.svg); }}
 
-    QPushButton.TabBtn:checked {
-        background-color: rgba(14, 165, 233, 0.18);
-        color: #38bdf8;
-        border: 1px solid rgba(56, 189, 248, 0.45);
-        font-weight: 700;
-    }
+    QProgressBar {{ background: {t.RAISED}; border: none; border-radius: 3px; }}
+    QProgressBar::chunk {{ background: {t.ACCENT}; border-radius: 3px; }}
+    QProgressBar[tone="good"]::chunk {{ background: {t.GOOD}; }}
+    QProgressBar[tone="warn"]::chunk {{ background: {t.WARN}; }}
+    QProgressBar[tone="bad"]::chunk {{ background: {t.BAD}; }}
 
-    QPushButton.ActionBtn {
-        background-color: rgba(30, 41, 59, 0.65);
-        color: #cbd5e1;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 8px;
-        padding: 5px 10px;
-        font-weight: 600;
-        font-size: 12px;
-    }
+    /* ---------- Scrolling ---------- */
+    QScrollArea {{ background: transparent; border: none; }}
+    QScrollArea > QWidget > QWidget {{ background: transparent; }}
+    QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
+    QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
+    QScrollBar::handle:vertical {{ background: {t.BORDER_STRONG}; min-height: 28px; border-radius: 3px; }}
+    QScrollBar::handle:horizontal {{ background: {t.BORDER_STRONG}; min-width: 28px; border-radius: 3px; }}
+    QScrollBar::handle:hover {{ background: {t.TEXT_4}; }}
+    QScrollBar::add-line, QScrollBar::sub-line {{ width: 0px; height: 0px; border: none; background: transparent; }}
+    QScrollBar::add-page, QScrollBar::sub-page, QScrollBar::corner {{ background: transparent; }}
 
-    QPushButton.ActionBtn:hover {
-        background-color: rgba(51, 65, 85, 0.85);
-        color: #38bdf8;
-        border-color: rgba(56, 189, 248, 0.35);
-    }
+    QListView {{ background: transparent; border: none; }}
 
-    QPushButton.ActionBtn:checked {
-        background-color: rgba(14, 165, 233, 0.2);
-        color: #38bdf8;
-        border: 1px solid rgba(56, 189, 248, 0.5);
-        font-weight: 700;
-    }
-
-    QLineEdit {
-        background-color: rgba(15, 23, 42, 0.7);
-        color: #f8fafc;
-        border: 1px solid rgba(255, 255, 255, 0.09);
-        border-radius: 8px;
-        padding: 6px 12px;
-        font-size: 12px;
-    }
-
-    QLineEdit:focus {
-        border: 1px solid #38bdf8;
-        background-color: rgba(15, 23, 42, 0.9);
-    }
-
-    QToolTip {
-        background-color: #0b101b;
-        color: #f8fafc;
-        border: 1px solid rgba(56, 189, 248, 0.3);
-        padding: 6px 10px;
-        border-radius: 7px;
-        font-size: 11px;
-    }
+    /* ---------- Overlays ---------- */
+    QToolTip {{
+        background: {t.OVERLAY}; color: {t.TEXT}; border: 1px solid {t.BORDER_STRONG};
+        border-radius: 8px; padding: 6px 10px; font-size: 12px;
+    }}
+    QMenu {{ background: {t.OVERLAY}; border: 1px solid {t.BORDER_STRONG}; border-radius: 10px; padding: 4px; }}
+    QMenu::item {{ padding: 6px 14px; border-radius: 6px; }}
+    QMenu::item:selected {{ background: {t.HOVER}; }}
+    QMenu::item:disabled {{ color: {t.TEXT_3}; }}
+    QMenu::separator {{ height: 1px; background: {t.BORDER}; margin: 4px 6px; }}
+    QMessageBox QPushButton {{ min-width: 76px; }}
     """
+
+
+def _palette() -> QPalette:
+    pal = QPalette()
+    roles = {
+        QPalette.ColorRole.Window: t.CANVAS,
+        QPalette.ColorRole.WindowText: t.TEXT,
+        QPalette.ColorRole.Base: t.RAISED,
+        QPalette.ColorRole.AlternateBase: t.SURFACE,
+        QPalette.ColorRole.Text: t.TEXT,
+        QPalette.ColorRole.Button: t.RAISED,
+        QPalette.ColorRole.ButtonText: t.TEXT,
+        QPalette.ColorRole.Highlight: t.ACCENT,
+        QPalette.ColorRole.HighlightedText: t.ON_ACCENT,
+        QPalette.ColorRole.ToolTipBase: t.OVERLAY,
+        QPalette.ColorRole.ToolTipText: t.TEXT,
+        QPalette.ColorRole.PlaceholderText: t.TEXT_3,
+        QPalette.ColorRole.Link: t.ACCENT,
+    }
+    for role, hex_color in roles.items():
+        pal.setColor(role, QColor(hex_color))
+    for role in (QPalette.ColorRole.Text, QPalette.ColorRole.WindowText, QPalette.ColorRole.ButtonText):
+        pal.setColor(QPalette.ColorGroup.Disabled, role, QColor(t.TEXT_4))
+    return pal
+
+
+def apply_theme(app: QApplication) -> None:
+    """Fusion + token palette + QSS: identical rendering under Breeze, Kvantum or anything else."""
+    if app.property("qhealth_themed"):
+        return
+    app.setStyle("Fusion")
+    app.setPalette(_palette())
+    app.setFont(t.font(13))
+    app.setStyleSheet(get_qhealth_stylesheet())
+    app.setProperty("qhealth_themed", True)

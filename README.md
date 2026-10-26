@@ -4,7 +4,7 @@
 
 ![QHealth Icon](assets/qhealth.svg)
 
-**A high-performance, dark glassmorphic screen time and activity tracker crafted for Linux (KDE Plasma & Wayland / X11).**
+**A high-performance, calm dark-mode screen time and activity tracker for Linux (KDE Plasma, Wayland / X11) and Windows 10 / 11.**
 
 *100% Offline • Ultra-Lightweight (~13 MB RAM Daemon) • 0% Idle CPU • Native PyQt6*
 
@@ -19,12 +19,12 @@
 ## ✨ Features
 
 - **📊 Comprehensive Screen Time Analytics:**
-  - **Screen Time Radial Gauge:** Multi-segment glowing ring showing active hours and category share (*Development, Browsing, Gaming, Communication, Media & Design, etc.*).
+  - **Screen Time Radial Gauge:** Multi-segment ring showing active hours and category share (*Development, Browsing, Gaming, Communication, Media & Design, etc.*).
   - **Dynamic Activity Timeline:** Interactive bar chart displaying 24-hour hourly distribution, 7-day breakdowns, 30-day trends, and monthly distribution with hover stats.
   - **Global Time Range Filter:** Seamlessly switch between **`[ Day ]`**, **`[ Week ]`**, **`[ Month ]`**, **`[ Year ]`**, and **`[ All Time ]`**.
 
 - **⌨️ Physical Hardware Heatmaps:**
-  - **Physical Keyboard Heatmap:** Full visual keyboard layout (*Spacebar, Enter, Shift, WASD, Number row, Modifiers*) that glows from dark slate to bright neon emerald/cyan based on real-time keypress frequency.
+  - **Physical Keyboard Heatmap:** Full visual keyboard layout (*Spacebar, Enter, Shift, WASD, Number row, Modifiers*) shaded from the card surface to full blue based on keypress frequency.
   - **Physical Mouse Heatmap:** Visual ergonomic mouse illustration tracking **Left Click (LMB)**, **Right Click (RMB)**, **Middle Click (Wheel)**, and **Side Buttons (Back/Forward)**.
   - **70-Day GitHub-Style Activity Matrix:** Intensity matrix of daily typing and clicking volume over the past 10 weeks.
 
@@ -33,7 +33,7 @@
   - **Interactive Drilldown View:** Click on any application to view dedicated metrics, 14-day usage trend charts, and recent window titles/tasks.
 
 - **📅 Glowing Calendar Date Selector:**
-  - Dark glassmorphic calendar popup where **active days glow** based on screen time intensity (Level 0 to Level 4 neon glow) with hover stats.
+  - Calendar popup where **active days are shaded** by screen time intensity (Level 0 to Level 4) with hover stats, plus ‹ › stepping by day / week / month / year.
 
 - **⚡ High Performance & Low Resource Footprint:**
   - **100% Pure Native PyQt6:** Zero Chromium or WebEngine bloat.
@@ -64,64 +64,78 @@
 
 ---
 
-## 🚀 Installation & Setup
+## 🚀 Installation
 
-### Prerequisites
-- Linux OS (Arch Linux, CachyOS, Fedora, Ubuntu, Debian, etc.)
-- Python 3.10+
-- `python-pyqt6`
+On Linux QHealth needs **Python 3.10+**, **PyQt6** (with SVG support) and a **KDE Plasma** session (Wayland or X11).
+To count keystrokes and clicks it reads `/dev/input`, so your account must be in the `input` group:
 
-On Arch Linux / CachyOS:
 ```bash
-sudo pacman -S python python-pyqt6
+sudo usermod -aG input "$USER"   # then log out and back in
 ```
 
-On Ubuntu / Debian:
-```bash
-sudo apt install python3 python3-pyqt6
+> Being in `input` lets any program you run read raw keyboard/mouse events — that is how QHealth works,
+> and it keeps everything in a local SQLite database (`~/.local/share/qhealth/`). Nothing is sent anywhere.
+
+### Windows 10 / 11
+
+Download `QHealth-<version>-Setup.exe` from the [Releases](https://github.com/Qssaf/qhealth/releases) page
+(every `v*` tag publishes one; the latest `main` build is also attached to the
+[CI run](https://github.com/Qssaf/qhealth/actions) as the `qhealth-windows` artifact) and run it.
+No admin rights are needed. The installer adds a Start-menu entry and, unless you untick it,
+starts QHealth in the tray when you sign in — tracking runs inside the tray app, so keep it running
+(toggle it later from the tray menu: **Start with Windows**). Your history lives in `%LOCALAPPDATA%\QHealth`.
+
+Build it yourself from a checkout (Python 3.10+):
+
+```powershell
+pip install PyQt6 pyinstaller
+python packaging\windows\make_icon.py
+pyinstaller packaging\windows\qhealth.spec --noconfirm   # -> dist\QHealth\QHealth.exe
+iscc /DAppVersion=3.0.0 packaging\windows\qhealth.iss       # optional installer (Inno Setup 6)
 ```
 
-On Fedora:
+Or just run it from source: `pip install PyQt6` then `python main.py`.
+
+### Arch Linux / CachyOS (native package)
+
 ```bash
-sudo dnf install python3 python3-pyqt6
+cd packaging/arch
+makepkg -si                                  # builds from the v$pkgver release tag
+systemctl --user enable --now qhealth.service
 ```
 
----
+The package installs the `qhealth` command, app-menu entry, icon, AppStream metadata, the systemd user
+service and the Plasma panel widget ("QHealth Status").
 
-### Running QHealth
+### Any distro (per-user install, no root)
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/Qssaf/qhealth.git
-   cd qhealth
-   ```
+Install PyQt6 from your distro first:
 
-2. **Launch the GUI:**
-   ```bash
-   python3 main.py
-   ```
+| Distro | Command |
+|---|---|
+| Arch / CachyOS | `sudo pacman -S python-pyqt6 qt6-svg libnotify` |
+| Fedora | `sudo dnf install python3-pyqt6 libnotify` |
+| Debian / Ubuntu | `sudo apt install python3-pyqt6 python3-pyqt6.qtsvg libnotify-bin` |
 
-3. **Enable 24/7 Background Tracking (Systemd User Service):**
-   ```bash
-   mkdir -p ~/.config/systemd/user/
-   cat << 'EOF' > ~/.config/systemd/user/qhealth.service
-   [Unit]
-   Description=QHealth 24/7 Activity and Screen Time Tracking Daemon
-   After=graphical-session.target
+Then, from the repository:
 
-   [Service]
-   Type=simple
-   ExecStart=/usr/bin/python3 /path/to/qhealth/main.py --daemon
-   Restart=always
-   RestartSec=3
+```bash
+./install.sh --enable      # installs into ~/.local and starts 24/7 tracking
+./install.sh --uninstall   # removes the app (your history is kept)
+```
 
-   [Install]
-   WantedBy=default.target
-   EOF
+For a system-wide copy use `sudo PREFIX=/usr/local ./install.sh`. Re-running the installer upgrades in place
+and restarts the tracking service if it was running.
 
-   systemctl --user daemon-reload
-   systemctl --user enable --now qhealth
-   ```
+### Run from source (development)
+
+```bash
+python3 main.py            # dashboard
+python3 main.py --daemon   # tracking daemon in the foreground
+```
+
+Python packaging (`pyproject.toml`) is included too: `pipx install .` gives you the `qhealth` command
+(without the desktop entry and service files).
 
 ---
 

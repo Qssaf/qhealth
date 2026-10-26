@@ -4,25 +4,32 @@ import time
 import signal
 import sys
 import datetime
-import subprocess
-from pathlib import Path
+import threading
 from typing import Optional
 from .tracker import ActivityTracker
 from .db import (
     init_db, is_paused_setting, get_stats_by_range,
-    get_all_app_budgets, get_exceeded_app_budgets, vacuum_and_cleanup_db
+    get_all_app_budgets, get_exceeded_app_budgets, vacuum_and_cleanup_db,
+    get_focus_session, stop_focus_session
 )
-from .blocker import force_close_app, send_block_notification
+from .blocker import (
+    force_close_app, send_block_notification,
+    send_focus_block_notification, send_focus_complete_notification
+)
+from .app_resolver import app_resolver
+from . import notify
+from .paths import DATA_DIR, STATE_FILE, PID_FILE
 
-STATE_DIR = Path.home() / ".local" / "share" / "qhealth"
-STATE_FILE = STATE_DIR / "live_state.json"
-PID_FILE = STATE_DIR / "daemon.pid"
+STATE_DIR = DATA_DIR
 
 class QHealthDaemon:
     def __init__(self):
         self.running = False
         self.notified_budget_alerts = set()
         self._lock_file = None
+        self._was_focus_active = False
+        self._last_focus_dur_mins = 60
+        self._stopped = False
         init_db()
         self.tracker = ActivityTracker()
 
@@ -49,14 +56,59 @@ class QHealthDaemon:
         signal.signal(signal.SIGTERM, self._handle_signal)
 
         print(f"[QHealth Daemon] Running 24/7 background tracking (PID: {os.getpid()})...")
+        self._run()
 
+    def start_embedded(self):
+        """Windows: tracking lives inside the tray app, because a service can't see the user's desktop.
+        Single-instance is the tray app's job, so no PID lock or signal handlers here."""
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        self.running = True
+        self.tracker.start()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
         loop_count = 0
         today_dur = 0
         today_stats = {}
+        last_state = None
         try:
             while self.running:
                 # Sync paused state with DB setting
                 self.tracker.paused = is_paused_setting()
+
+                # Sync Focus Session state every second
+                focus_session = get_focus_session()
+                self.tracker.update_focus_session(focus_session)
+                focus_active = focus_session.get("active", False)
+
+                if self._was_focus_active and not focus_active:
+                    self._was_focus_active = False
+                    send_focus_complete_notification(self._last_focus_dur_mins)
+                elif focus_active:
+                    self._was_focus_active = True
+                    self._last_focus_dur_mins = focus_session.get("duration_minutes", 60)
+
+                    # Enforce focus restriction on active window
+                    cur_pid = None
+                    with self.tracker.window_lock:
+                        cur_app_id = self.tracker.resolved_app_info.get("app_id", "").lower()
+                        cur_raw = self.tracker.current_raw_app
+                        cur_cls = self.tracker.current_class
+                        cur_pid = getattr(self.tracker, "current_pid", None)
+                        cur_name = self.tracker.resolved_app_info.get("display_name", cur_raw or "Application")
+
+                    if (cur_app_id and cur_app_id != "qhealth" and
+                        not self.tracker.is_app_allowed_in_focus(cur_app_id, cur_raw, cur_cls)):
+                        rem_secs = focus_session.get("remaining_seconds", 0)
+                        rem_mins = max(1, (rem_secs + 59) // 60)
+                        force_close_app(cur_app_id, cur_name, cur_pid)
+                        send_focus_block_notification(cur_name, cur_app_id, rem_mins)
+                        with self.tracker.window_lock:
+                            self.tracker.current_raw_app = ""
+                            self.tracker.current_title = ""
+                            self.tracker.current_class = ""
+                            self.tracker.current_pid = 0
+                            self.tracker.resolved_app_info = app_resolver.resolve("")
 
                 # Refresh today duration and budget alerts every 5 iterations
                 if loop_count % 5 == 0:
@@ -89,13 +141,18 @@ class QHealthDaemon:
                 metrics["today_keystrokes"] = today_stats.get("total_keystrokes", 0)
                 metrics["today_clicks"] = today_stats.get("total_clicks", 0)
 
-                temp_file = STATE_DIR / "live_state.tmp"
-                try:
-                    with open(temp_file, "w") as f:
-                        json.dump(metrics, f)
-                    temp_file.replace(STATE_FILE)
-                except Exception:
-                    pass
+                # Only rewrite the file when something a reader shows has changed
+                # (seconds_since_input ticks every second and would force a write each loop)
+                state = json.dumps({k: v for k, v in metrics.items() if k != "seconds_since_input"}, sort_keys=True)
+                if state != last_state or not STATE_FILE.exists():
+                    temp_file = STATE_DIR / "live_state.tmp"
+                    try:
+                        with open(temp_file, "w") as f:
+                            json.dump(metrics, f)
+                        temp_file.replace(STATE_FILE)
+                        last_state = state
+                    except Exception:
+                        pass
 
                 loop_count += 1
                 time.sleep(1.0)
@@ -154,23 +211,15 @@ class QHealthDaemon:
                 force_close_app(a_id, app_name, cur_pid)
 
     def _send_notification(self, title: str, message: str):
-        try:
-            icon_path = str(Path.home() / ".local" / "share" / "icons" / "qhealth.svg")
-            subprocess.run([
-                "notify-send",
-                "-a", "QHealth",
-                "-i", icon_path if os.path.exists(icon_path) else "qhealth",
-                "-u", "normal",
-                title,
-                message
-            ], timeout=3)
-        except Exception:
-            pass
+        notify.send(title, message)
 
     def _handle_signal(self, signum, frame):
         self.running = False
 
     def stop(self):
+        if self._stopped:
+            return
+        self._stopped = True
         self.running = False
         self.tracker.stop()
         if self._lock_file:

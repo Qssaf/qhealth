@@ -1,31 +1,58 @@
-from typing import Dict, Any
-from PyQt6.QtCore import Qt, QRectF, QPoint
-from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolTip, QSizePolicy
-from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QPainterPath
+import math
+from typing import Dict
+from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QToolTip, QSizePolicy
+from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QPainterPath
+from .. import theme as t
 from ..utils import format_number
+from .common import RampLegend, card_header
+
+BUTTON_NAMES = {
+    "left": "Left click",
+    "right": "Right click",
+    "middle": "Middle click (wheel)",
+    "side1": "Side button (back)",
+    "side2": "Side button (forward)",
+}
+
 
 class MousePainter(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumHeight(170)
         self.mouse_counts: Dict[str, int] = {}
+        self.hover = ""
         self.setMouseTracking(True)
         self.btn_rects = []
+        self.setAccessibleName("Mouse button heatmap")
 
     def set_data(self, mouse_counts: Dict[str, int]):
         self.mouse_counts = mouse_counts
+        self.setAccessibleDescription(", ".join(f"{BUTTON_NAMES.get(k, k)} {v}" for k, v in mouse_counts.items()) or "No clicks")
         self.update()
 
     def mouseMoveEvent(self, event):
-        pos = event.pos()
+        pos = event.position()
         total_clicks = sum(self.mouse_counts.values())
-        for rect, name, label, count in self.btn_rects:
-            if rect.contains(pos.x(), pos.y()):
+        # Smallest targets first so the wheel wins over the button underneath it
+        for rect, name, label, count in sorted(self.btn_rects, key=lambda b: b[0].width() * b[0].height()):
+            if rect.adjusted(-3, -3, 3, 3).contains(pos):
+                if name != self.hover:
+                    self.hover = name
+                    self.update()
                 pct = round((count / total_clicks * 100), 1) if total_clicks > 0 else 0.0
-                tip = f"🖱 {label}\nClicks: {format_number(count)} ({pct}%)"
-                QToolTip.showText(event.globalPosition().toPoint(), tip, self)
+                QToolTip.showText(event.globalPosition().toPoint(), f"{label}\n{format_number(count)} clicks  ·  {pct}%", self)
                 return
-        super().mouseMoveEvent(event)
+        if self.hover:
+            self.hover = ""
+            self.update()
+        QToolTip.hideText()
+
+    def leaveEvent(self, event):
+        self.hover = ""
+        self.update()
+        super().leaveEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -35,7 +62,9 @@ class MousePainter(QWidget):
         w = float(self.width())
         h = float(self.height())
 
-        mh = max(130.0, min(h - 16.0, (w - 24.0) * 1.5))
+        avail_w = max(40.0, w - 24.0)
+        avail_h = max(60.0, h - 8.0)
+        mh = max(60.0, min(240.0, min(avail_h, avail_w * 1.5)))
         mw = mh / 1.5
         mx = (w - mw) / 2.0
         my = (h - mh) / 2.0
@@ -44,91 +73,35 @@ class MousePainter(QWidget):
         if max_count == 0:
             max_count = 1
 
-        def get_btn_color(btn_name):
-            cnt = self.mouse_counts.get(btn_name, 0)
-            if cnt == 0:
-                return QColor("#0f1523"), QColor("#1e293b"), QColor("#94a3b8"), cnt
-            ratio = cnt / float(max_count)
-            if ratio < 0.20:
-                return QColor("#064e3b"), QColor("#047857"), QColor("#a7f3d0"), cnt
-            elif ratio < 0.50:
-                return QColor("#047857"), QColor("#10b981"), QColor("#ffffff"), cnt
-            elif ratio < 0.80:
-                return QColor("#0e7490"), QColor("#22d3ee"), QColor("#ffffff"), cnt
-            else:
-                return QColor("#0284c7"), QColor("#38bdf8"), QColor("#ffffff"), cnt
+        def paint_button(rect: QRectF, name: str, radius: float, caption: str = ""):
+            count = self.mouse_counts.get(name, 0)
+            self.btn_rects.append((rect, name, BUTTON_NAMES[name], count))
+            bg = t.heat(t.SERIES_CLICKS, math.sqrt(count / float(max_count)) if count else 0.0)
+            painter.setBrush(bg)
+            painter.setPen(QPen(QColor(t.TEXT if name == self.hover else t.BORDER_STRONG), 1.5 if name == self.hover else 1.0))
+            painter.drawRoundedRect(rect, radius, radius)
+            if caption:
+                painter.setPen(QColor(t.TEXT_3) if count == 0 else t.ink_on(bg))
+                painter.setFont(t.font(max(10, int(mw * 0.075)), QFont.Weight.DemiBold))
+                painter.drawText(rect.adjusted(0, rect.height() * 0.35, 0, 0), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                                 f"{caption}\n{format_number(count)}")
 
-        # 1. Mouse Body
-        body_path = QPainterPath()
-        body_rect = QRectF(mx, my, mw, mh)
-        body_path.addRoundedRect(body_rect, mw * 0.35, mw * 0.35)
-        painter.setBrush(QBrush(QColor("#090e18")))
-        painter.setPen(QPen(QColor("#1e293b"), 1.8))
-        painter.drawPath(body_path)
+        # Body
+        body = QPainterPath()
+        body.addRoundedRect(QRectF(mx, my, mw, mh), mw * 0.42, mw * 0.42)
+        painter.setBrush(QColor(t.RAISED))
+        painter.setPen(QPen(QColor(t.BORDER_STRONG), 1.2))
+        painter.drawPath(body)
 
-        # 2. Left Button (LMB)
-        btn_w = (mw / 2.0) - 7.0
+        btn_w = (mw / 2.0) - 6.0
         btn_h = mh * 0.44
-        left_rect = QRectF(mx + 5, my + 5, btn_w, btn_h)
-        bg, border, text_c, count = get_btn_color("left")
-        self.btn_rects.append((left_rect, "left", "Left Click", count))
-        painter.setBrush(QBrush(bg))
-        painter.setPen(QPen(border, 1.4))
-        painter.drawRoundedRect(left_rect, 12, 12)
-        
-        # 3D Highlight on button
-        painter.setPen(QPen(QColor(255, 255, 255, 30), 1.0))
-        painter.drawLine(int(left_rect.left() + 4), int(left_rect.top() + 1), int(left_rect.right() - 4), int(left_rect.top() + 1))
+        paint_button(QRectF(mx + 4, my + 4, btn_w, btn_h), "left", mw * 0.3, "L")
+        paint_button(QRectF(mx + mw / 2.0 + 2, my + 4, btn_w, btn_h), "right", mw * 0.3, "R")
 
-        painter.setPen(text_c)
-        painter.setFont(QFont("Inter", max(8, int(mw * 0.08)), QFont.Weight.Bold))
-        painter.drawText(left_rect, Qt.AlignmentFlag.AlignCenter, f"LMB\n{format_number(count)}")
-
-        # 3. Right Button (RMB)
-        right_rect = QRectF(mx + (mw / 2.0) + 2, my + 5, btn_w, btn_h)
-        bg, border, text_c, count = get_btn_color("right")
-        self.btn_rects.append((right_rect, "right", "Right Click", count))
-        painter.setBrush(QBrush(bg))
-        painter.setPen(QPen(border, 1.4))
-        painter.drawRoundedRect(right_rect, 12, 12)
-
-        # 3D Highlight on button
-        painter.setPen(QPen(QColor(255, 255, 255, 30), 1.0))
-        painter.drawLine(int(right_rect.left() + 4), int(right_rect.top() + 1), int(right_rect.right() - 4), int(right_rect.top() + 1))
-
-        painter.setPen(text_c)
-        painter.setFont(QFont("Inter", max(8, int(mw * 0.08)), QFont.Weight.Bold))
-        painter.drawText(right_rect, Qt.AlignmentFlag.AlignCenter, f"RMB\n{format_number(count)}")
-
-        # 4. Scroll Wheel / Middle Button
-        wheel_w = mw * 0.14
-        wheel_h = mh * 0.18
-        wheel_rect = QRectF(mx + (mw - wheel_w) / 2.0, my + mh * 0.12, wheel_w, wheel_h)
-        bg, border, text_c, count = get_btn_color("middle")
-        self.btn_rects.append((wheel_rect, "middle", "Middle Click (Wheel)", count))
-        painter.setBrush(QBrush(bg))
-        painter.setPen(QPen(border, 1.4))
-        painter.drawRoundedRect(wheel_rect, 6, 6)
-
-        # 5. Side Buttons (Back / Forward)
-        side1_rect = QRectF(mx - 7, my + mh * 0.32, 7, mh * 0.14)
-        bg, border, text_c, count = get_btn_color("side1")
-        self.btn_rects.append((side1_rect, "side1", "Side Button (Back)", count))
-        painter.setBrush(QBrush(bg))
-        painter.setPen(QPen(border, 1.0))
-        painter.drawRoundedRect(side1_rect, 2.5, 2.5)
-
-        side2_rect = QRectF(mx - 7, my + mh * 0.48, 7, mh * 0.14)
-        bg, border, text_c, count = get_btn_color("side2")
-        self.btn_rects.append((side2_rect, "side2", "Side Button (Forward)", count))
-        painter.setBrush(QBrush(bg))
-        painter.setPen(QPen(border, 1.0))
-        painter.drawRoundedRect(side2_rect, 2.5, 2.5)
-
-        # 6. Palm Rest Label
-        painter.setPen(QColor("#475569"))
-        painter.setFont(QFont("Inter", max(7, int(mw * 0.065)), QFont.Weight.Medium))
-        painter.drawText(QRectF(mx, my + mh * 0.68, mw, 18), Qt.AlignmentFlag.AlignCenter, "MOUSE CLICKS")
+        wheel_w, wheel_h = mw * 0.13, mh * 0.17
+        paint_button(QRectF(mx + (mw - wheel_w) / 2.0, my + mh * 0.11, wheel_w, wheel_h), "middle", wheel_w / 2)
+        paint_button(QRectF(mx - 6, my + mh * 0.34, 6, mh * 0.13), "side1", 3)
+        paint_button(QRectF(mx - 6, my + mh * 0.50, 6, mh * 0.13), "side2", 3)
 
         painter.end()
 
@@ -136,34 +109,27 @@ class MousePainter(QWidget):
 class MouseHeatmapWidget(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setProperty("class", "GlassCard")
+        self.setProperty("class", "Card")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 12, 14, 12)
-        lay.setSpacing(6)
+        lay.setContentsMargins(t.PAD, t.PAD, t.PAD, 14)
+        lay.setSpacing(10)
 
-        # Header
-        hdr = QHBoxLayout()
-        title = QLabel("PHYSICAL MOUSE HEATMAP")
-        title.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px;")
-        self.sub_lbl = QLabel("Clicks")
-        self.sub_lbl.setStyleSheet("font-size: 10px; color: #64748b; font-family: monospace;")
-        hdr.addWidget(title)
-        hdr.addStretch()
-        hdr.addWidget(self.sub_lbl)
+        hdr, _, self.sub_lbl = card_header("Mouse", "Clicks")
         lay.addLayout(hdr)
 
         self.mouse_painter = MousePainter(self)
         lay.addWidget(self.mouse_painter, 1)
 
+        foot = QHBoxLayout()
+        self.total_lbl = t.label("", "caption")
+        foot.addWidget(self.total_lbl)
+        foot.addStretch()
+        foot.addWidget(RampLegend(t.SERIES_CLICKS))
+        lay.addLayout(foot)
+
     def update_data(self, mouse_counts: Dict[str, int], range_type: str = "day"):
-        sub_map = {
-            "day": "Day's clicks",
-            "week": "Last 7 days clicks",
-            "month": "Last 30 days clicks",
-            "year": "This year's clicks",
-            "all_time": "Lifetime clicks"
-        }
-        self.sub_lbl.setText(sub_map.get(range_type, "Clicks"))
+        total = sum(mouse_counts.values())
+        self.total_lbl.setText(f"{format_number(total)} clicks" if total else "No clicks yet")
         self.mouse_painter.set_data(mouse_counts)

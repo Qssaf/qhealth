@@ -1,8 +1,11 @@
-from typing import Dict, Any, List, Tuple
-from PyQt6.QtCore import Qt, QRectF, QPoint
-from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolTip, QSizePolicy
-from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush, QLinearGradient
+import math
+from typing import Dict, List, Tuple
+from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QToolTip, QSizePolicy
+from PyQt6.QtGui import QPainter, QColor, QFont, QPen
+from .. import theme as t
 from ..utils import format_number
+from .common import RampLegend, card_header
 
 KEYBOARD_ROWS: List[List[Tuple[int, str, float]]] = [
     # Row 0: Number row (14.8u total)
@@ -32,34 +35,51 @@ KEYBOARD_ROWS: List[List[Tuple[int, str, float]]] = [
     # Row 4: Bottom row with Left/Down/Right Arrows (14.8u total)
     [
         (29, "CTRL", 1.2), (125, "SUPER", 1.0), (56, "ALT", 1.0),
-        (57, "SPACEBAR", 6.6),
+        (57, "SPACE", 6.6),
         (100, "ALT", 1.0), (97, "CTRL", 1.0),
         (105, "←", 1.0), (108, "↓", 1.0), (106, "→", 1.0)
     ]
 ]
 
+
 class KeyboardPainter(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumHeight(170)
         self.key_counts: Dict[int, int] = {}
+        self.hover_code = None
         self.setMouseTracking(True)
         self.key_rects = []
+        self.setAccessibleName("Keyboard heatmap of key presses")
 
     def set_data(self, key_counts: Dict[int, int]):
         self.key_counts = key_counts
+        top = sorted(key_counts.items(), key=lambda kv: kv[1], reverse=True)[:3]
+        names = {code: lbl for row in KEYBOARD_ROWS for code, lbl, _ in row}
+        self.setAccessibleDescription(", ".join(f"{names.get(c, c)} {n}" for c, n in top) or "No key presses")
         self.update()
 
     def mouseMoveEvent(self, event):
-        pos = event.pos()
+        pos = event.position()
         total_keys = sum(self.key_counts.values())
         for rect, code, label, count in self.key_rects:
-            if rect.contains(pos.x(), pos.y()):
+            if rect.contains(pos):
+                if code != self.hover_code:
+                    self.hover_code = code
+                    self.update()
                 pct = round((count / total_keys * 100), 1) if total_keys > 0 else 0.0
-                tip = f"⌨ Key: {label}\nPresses: {format_number(count)} ({pct}%)"
-                QToolTip.showText(event.globalPosition().toPoint(), tip, self)
+                QToolTip.showText(event.globalPosition().toPoint(), f"{label}\n{format_number(count)} presses  ·  {pct}%", self)
                 return
-        super().mouseMoveEvent(event)
+        if self.hover_code is not None:
+            self.hover_code = None
+            self.update()
+        QToolTip.hideText()
+
+    def leaveEvent(self, event):
+        self.hover_code = None
+        self.update()
+        super().leaveEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -71,27 +91,31 @@ class KeyboardPainter(QWidget):
 
         total_units = 14.8
         row_count = 5.0
-        gap = max(2.5, min(5.0, w / 200.0))
+        gap = max(3.0, min(5.0, w / 180.0))
 
-        avail_w = max(100.0, w - 16.0)
-        avail_h = max(80.0, h - 16.0)
+        avail_w = max(100.0, w - 8.0)
+        avail_h = max(80.0, h - 8.0)
 
         unit_w = max(4.0, (avail_w - (total_units * gap)) / total_units)
         unit_h = max(10.0, (avail_h - (row_count * gap)) / row_count)
 
-        key_h = max(14.0, min(unit_h, unit_w * 1.15))
-        key_unit_w = max(4.0, (avail_w - (total_units * gap)) / total_units)
+        # Preserve natural key proportions (aspect ratio ~1:1) when stretched horizontally or vertically
+        target_unit = max(8.0, min(unit_w, unit_h * 1.25))
+        key_unit_w = target_unit
+        key_h = max(14.0, min(unit_h, target_unit * 0.95))
 
         total_kb_w = total_units * key_unit_w + (total_units - 1.0) * gap
         total_kb_h = row_count * key_h + (row_count - 1.0) * gap
 
-        x_start = max(8.0, (w - total_kb_w) / 2.0)
-        y_start = max(8.0, (h - total_kb_h) / 2.0)
+        x_start = max(4.0, (w - total_kb_w) / 2.0)
+        y_start = max(4.0, (h - total_kb_h) / 2.0)
 
         max_count = max(self.key_counts.values()) if self.key_counts else 1
         if max_count == 0:
             max_count = 1
 
+        f_size = max(9, min(13, int(key_h * 0.34)))
+        font_used, font_unused = t.font(f_size, QFont.Weight.DemiBold), t.font(f_size, QFont.Weight.Medium)
         for r_idx, row in enumerate(KEYBOARD_ROWS):
             x_cursor = x_start
             y_pos = y_start + r_idx * (key_h + gap)
@@ -102,47 +126,20 @@ class KeyboardPainter(QWidget):
                 count = self.key_counts.get(code, 0)
                 self.key_rects.append((rect, code, label, count))
 
-                # Compute key color intensity
-                if count == 0:
-                    bg_color = QColor("#0f1523")
-                    border_color = QColor("#1e293b")
-                    text_color = QColor("#94a3b8")
+                # sqrt scale: one dominant key (space) shouldn't flatten everything else
+                ratio = math.sqrt(count / float(max_count)) if count else 0.0
+                bg = t.heat(t.SERIES_KEYS, ratio)
+                painter.setBrush(bg)
+                if code == self.hover_code:
+                    painter.setPen(QPen(QColor(t.TEXT), 1.5))
+                elif count == 0:
+                    painter.setPen(QPen(QColor(t.BORDER), 1.0))
                 else:
-                    ratio = count / float(max_count)
-                    if ratio < 0.20:
-                        bg_color = QColor("#064e3b")
-                        border_color = QColor("#047857")
-                        text_color = QColor("#a7f3d0")
-                    elif ratio < 0.50:
-                        bg_color = QColor("#047857")
-                        border_color = QColor("#10b981")
-                        text_color = QColor("#ffffff")
-                    elif ratio < 0.80:
-                        bg_color = QColor("#0e7490")
-                        border_color = QColor("#22d3ee")
-                        text_color = QColor("#ffffff")
-                    else:
-                        bg_color = QColor("#0284c7")
-                        border_color = QColor("#38bdf8")
-                        text_color = QColor("#ffffff")
+                    painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 5, 5)
 
-                # 1. Paint 3D Keycap Base
-                painter.setBrush(QBrush(bg_color))
-                painter.setPen(QPen(border_color, 1.2))
-                painter.drawRoundedRect(rect, 4.5, 4.5)
-
-                # 2. Tactile 3D Bevel (Top light highlight, Bottom shadow)
-                painter.setPen(QPen(QColor(255, 255, 255, 30 if count == 0 else 60), 1.0))
-                painter.drawLine(int(rect.left() + 3), int(rect.top() + 1), int(rect.right() - 3), int(rect.top() + 1))
-
-                painter.setPen(QPen(QColor(0, 0, 0, 75), 1.2))
-                painter.drawLine(int(rect.left() + 3), int(rect.bottom() - 1), int(rect.right() - 3), int(rect.bottom() - 1))
-
-                # 3. Keycap Legend
-                painter.setPen(text_color)
-                f_size = max(9, min(13, int(key_h * 0.38)))
-                font = QFont("Inter", f_size, QFont.Weight.Bold if count > 0 else QFont.Weight.DemiBold)
-                painter.setFont(font)
+                painter.setPen(QColor(t.TEXT_3) if count == 0 else t.ink_on(bg))
+                painter.setFont(font_used if count else font_unused)
                 painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
 
                 x_cursor += key_w + gap
@@ -153,34 +150,27 @@ class KeyboardPainter(QWidget):
 class KeyboardHeatmapWidget(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setProperty("class", "GlassCard")
+        self.setProperty("class", "Card")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 12, 14, 12)
-        lay.setSpacing(6)
+        lay.setContentsMargins(t.PAD, t.PAD, t.PAD, 14)
+        lay.setSpacing(10)
 
-        # Header
-        hdr = QHBoxLayout()
-        title = QLabel("PHYSICAL KEYBOARD HEATMAP")
-        title.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px;")
-        self.sub_lbl = QLabel("Live key frequency")
-        self.sub_lbl.setStyleSheet("font-size: 10px; color: #64748b; font-family: monospace;")
-        hdr.addWidget(title)
-        hdr.addStretch()
-        hdr.addWidget(self.sub_lbl)
+        hdr, _, self.sub_lbl = card_header("Keyboard", "Key presses")
         lay.addLayout(hdr)
 
         self.keyboard_painter = KeyboardPainter(self)
         lay.addWidget(self.keyboard_painter, 1)
 
+        foot = QHBoxLayout()
+        self.total_lbl = t.label("", "caption")
+        foot.addWidget(self.total_lbl)
+        foot.addStretch()
+        foot.addWidget(RampLegend(t.SERIES_KEYS))
+        lay.addLayout(foot)
+
     def update_data(self, key_counts: Dict[int, int], range_type: str = "day"):
-        sub_map = {
-            "day": "Day's key frequency",
-            "week": "Last 7 days key frequency",
-            "month": "Last 30 days key frequency",
-            "year": "This year's key frequency",
-            "all_time": "Lifetime key frequency"
-        }
-        self.sub_lbl.setText(sub_map.get(range_type, "Key frequency"))
+        total = sum(key_counts.values())
+        self.total_lbl.setText(f"{format_number(total)} key presses" if total else "No key presses in this range")
         self.keyboard_painter.set_data(key_counts)

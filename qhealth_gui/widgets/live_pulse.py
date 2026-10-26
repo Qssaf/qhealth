@@ -1,122 +1,108 @@
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QLabel
-from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QVBoxLayout, QSizePolicy
+from .. import theme as t
+from ..icons import pixmap
 from ..utils import get_app_icon_pixmap
 
+STATUS = {  # state -> (badge text, tone)
+    "waiting": ("● Waiting for data", ""),
+    "live": ("● Live", "good"),
+    "idle": ("● Idle", ""),
+    "paused": ("● Paused", "warn"),
+}
+
+
 class LivePulseWidget(QFrame):
+    """'Now' strip: the focused app and window plus live typing / clicking speed."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setProperty("class", "GlassCard")
+        self.setProperty("class", "Card")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.current_app_id = ""
 
-        main_lay = QHBoxLayout(self)
-        main_lay.setContentsMargins(18, 14, 18, 14)
-        main_lay.setSpacing(16)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(t.PAD, 14, t.PAD, 14)
+        lay.setSpacing(14)
 
-        # Left: App Icon + Details
-        left_box = QHBoxLayout()
-        left_box.setSpacing(14)
-
-        self.app_icon_lbl = QLabel()
-        self.app_icon_lbl.setFixedSize(42, 42)
+        icon_tile = QFrame()
+        icon_tile.setProperty("class", "Tile")
+        icon_tile.setFixedSize(48, 48)
+        i_lay = QVBoxLayout(icon_tile)
+        i_lay.setContentsMargins(0, 0, 0, 0)
+        self.app_icon_lbl = t.label("", "body")
         self.app_icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.app_icon_lbl.setPixmap(get_app_icon_pixmap("user-desktop", "Desktop", 42))
+        self.app_icon_lbl.setPixmap(pixmap("overview", t.TEXT_3, 24))
+        i_lay.addWidget(self.app_icon_lbl)
+        lay.addWidget(icon_tile)
 
-        info_box = QVBoxLayout()
-        info_box.setSpacing(2)
+        info = QVBoxLayout()
+        info.setSpacing(2)
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        top.addWidget(t.label("NOW ACTIVE", "overline"))
+        self.badge = t.label("", "badge")
+        top.addWidget(self.badge)
+        top.addStretch()
+        info.addLayout(top)
 
-        hdr_row = QHBoxLayout()
-        hdr_row.setSpacing(8)
+        self.app_name_lbl = t.label("Desktop / Idle", "h2")
+        self.title_lbl = t.label("No active foreground window", "caption")
+        self.title_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        info.addWidget(self.app_name_lbl)
+        info.addWidget(self.title_lbl)
+        lay.addLayout(info, 1)
 
-        status_lbl = QLabel("CURRENT FOCUS")
-        status_lbl.setStyleSheet("font-size: 10px; font-weight: 700; color: #94a3b8; letter-spacing: 0.8px;")
+        self.wpm_card, self.wpm_val = self._metric("WPM", "Typing speed", t.SERIES_KEYS)
+        self.cpm_card, self.cpm_val = self._metric("CPM", "Clicks per minute", t.SERIES_CLICKS)
+        lay.addWidget(self.wpm_card)
+        lay.addWidget(self.cpm_card)
+        self._set_status("waiting")
 
-        self.badge = QLabel("LIVE")
-        self.badge.setStyleSheet("font-size: 9px; font-weight: 700; color: #34d399; background-color: rgba(16,185,129,0.15); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(16,185,129,0.3);")
+    def _metric(self, name: str, caption: str, color: str):
+        tile = QFrame()
+        tile.setProperty("class", "Tile")
+        tile.setMinimumWidth(128)
+        v = QVBoxLayout(tile)
+        v.setContentsMargins(12, 8, 12, 8)
+        v.setSpacing(0)
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        head.addWidget(t.dot(color, 6))
+        head.addWidget(t.label(name, "overline"))
+        head.addStretch()
+        v.addLayout(head)
+        val = t.label("0", "live")
+        val.setAccessibleName(caption)
+        v.addWidget(val)
+        v.addWidget(t.label(caption, "caption"))
+        return tile, val
 
-        hdr_row.addWidget(status_lbl)
-        hdr_row.addWidget(self.badge)
-        hdr_row.addStretch()
-        info_box.addLayout(hdr_row)
-
-        self.app_name_lbl = QLabel("Desktop / Idle")
-        self.app_name_lbl.setStyleSheet("font-size: 16px; font-weight: 700; color: #ffffff;")
-
-        self.title_lbl = QLabel("No active foreground window")
-        self.title_lbl.setStyleSheet("font-size: 11px; color: #94a3b8;")
-        self.title_lbl.setMaximumWidth(450)
-
-        info_box.addWidget(self.app_name_lbl)
-        info_box.addWidget(self.title_lbl)
-
-        left_box.addWidget(self.app_icon_lbl)
-        left_box.addLayout(info_box)
-
-        main_lay.addLayout(left_box, 1)
-
-        # Right: Live Speedometers (WPM, CPM)
-        metrics_lay = QHBoxLayout()
-        metrics_lay.setSpacing(10)
-
-        # WPM (Typing Speed)
-        self.wpm_card = QFrame()
-        self.wpm_card.setProperty("class", "GlassCardInner")
-        w_lay = QVBoxLayout(self.wpm_card)
-        w_lay.setContentsMargins(16, 8, 16, 8)
-        w_lay.setSpacing(0)
-        self.wpm_val = QLabel("0")
-        self.wpm_val.setStyleSheet("font-size: 18px; font-weight: 800; color: #34d399; font-family: monospace;")
-        self.wpm_val.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        wpm_sub = QLabel("Typing (WPM)")
-        wpm_sub.setStyleSheet("font-size: 9px; color: #64748b; font-weight: 600;")
-        wpm_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        w_lay.addWidget(self.wpm_val)
-        w_lay.addWidget(wpm_sub)
-        metrics_lay.addWidget(self.wpm_card)
-
-        # CPM (Mouse Clicks / Min)
-        self.cpm_card = QFrame()
-        self.cpm_card.setProperty("class", "GlassCardInner")
-        c_lay = QVBoxLayout(self.cpm_card)
-        c_lay.setContentsMargins(16, 8, 16, 8)
-        c_lay.setSpacing(0)
-        self.cpm_val = QLabel("0")
-        self.cpm_val.setStyleSheet("font-size: 18px; font-weight: 800; color: #22d3ee; font-family: monospace;")
-        self.cpm_val.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cpm_sub = QLabel("Clicks / Min")
-        cpm_sub.setStyleSheet("font-size: 9px; color: #64748b; font-weight: 600;")
-        cpm_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        c_lay.addWidget(self.cpm_val)
-        c_lay.addWidget(cpm_sub)
-        metrics_lay.addWidget(self.cpm_card)
-
-        main_lay.addLayout(metrics_lay)
+    def _set_status(self, state: str):
+        text, tone = STATUS[state]
+        self.badge.setText(text)
+        t.set_prop(self.badge, "tone", tone)
 
     def update_metrics(self, data: dict):
         if not data:
             return
 
-        is_paused = data.get("is_paused", False)
-        is_idle = data.get("is_idle", False)
-
-        if is_paused:
-            self.badge.setText("PAUSED")
-            self.badge.setStyleSheet("font-size: 9px; font-weight: 700; color: #fbbf24; background-color: rgba(245,158,11,0.15); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(245,158,11,0.3);")
-        elif is_idle:
-            self.badge.setText("IDLE / AFK")
-            self.badge.setStyleSheet("font-size: 9px; font-weight: 700; color: #94a3b8; background-color: rgba(100,116,139,0.15); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(100,116,139,0.3);")
+        if data.get("is_paused", False):
+            self._set_status("paused")
+        elif data.get("is_idle", False):
+            self._set_status("idle")
         else:
-            self.badge.setText("LIVE")
-            self.badge.setStyleSheet("font-size: 9px; font-weight: 700; color: #34d399; background-color: rgba(16,185,129,0.15); padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(16,185,129,0.3);")
+            self._set_status("live")
 
         app = data.get("active_app", "Desktop")
-        icon_name = data.get("app_icon", "")
+        self.current_app_id = data.get("app_id", "")
         self.app_name_lbl.setText(app if app else "Desktop")
-        self.app_icon_lbl.setPixmap(get_app_icon_pixmap(icon_name, app, 42))
+        self.app_icon_lbl.setPixmap(get_app_icon_pixmap(data.get("app_icon", ""), app, 32))
 
-        title = data.get("active_title", "")
-        if len(title) > 60:
-            title = title[:57] + "..."
-        self.title_lbl.setText(title if title else "No active window title")
+        raw_title = data.get("active_title", "")
+        disp_title = raw_title if len(raw_title) <= 90 else raw_title[:87] + "…"
+        self.title_lbl.setText(disp_title if disp_title else "No active window title")
+        self.title_lbl.setToolTip(raw_title if raw_title else "")
 
         self.wpm_val.setText(str(data.get("live_wpm", 0)))
         self.cpm_val.setText(str(data.get("live_cpm", 0)))

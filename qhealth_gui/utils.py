@@ -1,21 +1,12 @@
 import os
-import glob
 import hashlib
-from PyQt6.QtCore import Qt
+import functools
+from PyQt6.QtCore import Qt, QFileInfo
 from PyQt6.QtGui import QColor, QIcon, QPixmap, QPainter, QFont
+from PyQt6.QtWidgets import QFileIconProvider
+from . import theme
 
-APP_PALETTE = [
-    QColor("#10b981"), # Emerald
-    QColor("#06b6d4"), # Cyan
-    QColor("#8b5cf6"), # Violet
-    QColor("#f59e0b"), # Amber
-    QColor("#ec4899"), # Pink
-    QColor("#3b82f6"), # Blue
-    QColor("#14b8a6"), # Teal
-    QColor("#f97316"), # Orange
-    QColor("#6366f1"), # Indigo
-    QColor("#84cc16"), # Lime
-]
+APP_PALETTE = [QColor(c) for c in theme.CATEGORICAL]
 
 ICON_SEARCH_DIRS = [
     "/usr/share/icons/hicolor/64x64/apps",
@@ -27,14 +18,14 @@ ICON_SEARCH_DIRS = [
 ]
 
 CATEGORY_COLORS = {
-    "Development": QColor("#10b981"),
-    "Browsing": QColor("#06b6d4"),
-    "Gaming": QColor("#8b5cf6"),
-    "Communication": QColor("#f59e0b"),
-    "Media & Design": QColor("#ec4899"),
-    "Productivity": QColor("#3b82f6"),
-    "System": QColor("#64748b"),
-    "Other": QColor("#94a3b8")
+    "Development": APP_PALETTE[0],
+    "Browsing": APP_PALETTE[1],
+    "Communication": APP_PALETTE[2],
+    "Productivity": APP_PALETTE[3],
+    "Media & Design": APP_PALETTE[4],
+    "Gaming": APP_PALETTE[6],
+    "System": QColor(theme.TEXT_3),
+    "Other": QColor(theme.TEXT_2),
 }
 
 def get_app_color(app_name: str, index: int = 0) -> QColor:
@@ -48,6 +39,10 @@ def get_category_color(name: str) -> QColor:
         return CATEGORY_COLORS[name]
     h = int(hashlib.md5(name.encode('utf-8')).hexdigest(), 16)
     return APP_PALETTE[h % len(APP_PALETTE)]
+
+def category_badge_html(category: str) -> str:
+    """Rich-text badge body: identity rides on the coloured dot, the text stays in a text token."""
+    return f'<span style="color:{get_category_color(category).name()}">●</span>&nbsp;{category}'
 
 def format_duration(seconds: int) -> str:
     if seconds < 60:
@@ -65,8 +60,26 @@ def format_number(num: int) -> str:
         return f"{num / 1_000:.1f}k"
     return f"{num:,}"
 
+@functools.lru_cache(maxsize=1)
+def _icon_dir_listing():
+    listing = []
+    for d in ICON_SEARCH_DIRS:
+        try:
+            names = sorted(n for n in os.listdir(d) if not n.startswith("."))
+        except OSError:
+            continue
+        listing.append((d, names, set(names)))
+    return listing
+
+@functools.lru_cache(maxsize=1024)
 def get_app_icon_pixmap(icon_name: str, app_name: str, size: int = 32) -> QPixmap:
     """Returns real system icon from KDE theme or direct file paths, or sleek painted fallback."""
+    # Windows: apps are identified by their executable, and the shell knows its icon
+    if icon_name and icon_name.lower().endswith(".exe") and os.path.isfile(icon_name):
+        ico = QFileIconProvider().icon(QFileInfo(icon_name))
+        if not ico.isNull():
+            return ico.pixmap(size, size)
+
     candidates = []
     if icon_name:
         candidates.extend([
@@ -89,20 +102,17 @@ def get_app_icon_pixmap(icon_name: str, app_name: str, size: int = 32) -> QPixma
         if not ico.isNull():
             return ico.pixmap(size, size)
 
-    # 2. Check icon file paths directly
-    for d in ICON_SEARCH_DIRS:
-        if not os.path.exists(d):
-            continue
+    # 2. Check icon file paths directly (against a one-time directory listing, not per-call globbing)
+    for d, names, name_set in _icon_dir_listing():
         for cand in candidates:
             for ext in [".png", ".svg", ".xpm", ""]:
-                exact_path = os.path.join(d, f"{cand}{ext}")
-                if os.path.exists(exact_path):
-                    ico = QIcon(exact_path)
+                if f"{cand}{ext}" in name_set:
+                    ico = QIcon(os.path.join(d, f"{cand}{ext}"))
                     if not ico.isNull():
                         return ico.pixmap(size, size)
-            matches = glob.glob(os.path.join(d, f"*{cand}*"))
-            if matches:
-                ico = QIcon(matches[0])
+            match = next((n for n in names if cand in n), None)
+            if match:
+                ico = QIcon(os.path.join(d, match))
                 if not ico.isNull():
                     return ico.pixmap(size, size)
 
@@ -112,13 +122,12 @@ def get_app_icon_pixmap(icon_name: str, app_name: str, size: int = 32) -> QPixma
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-    painter.setBrush(QColor(30, 41, 59))
-    painter.setPen(QColor(51, 65, 85))
-    painter.drawRoundedRect(1, 1, size - 2, size - 2, 6, 6)
+    painter.setBrush(QColor(theme.HOVER))
+    painter.setPen(QColor(theme.BORDER_STRONG))
+    painter.drawRoundedRect(1, 1, size - 2, size - 2, size * 0.25, size * 0.25)
 
-    painter.setPen(QColor("#f8fafc"))
-    font = QFont("Inter", int(size * 0.42), QFont.Weight.Bold)
-    painter.setFont(font)
+    painter.setPen(QColor(theme.TEXT))
+    painter.setFont(theme.font(max(8, int(size * 0.44)), QFont.Weight.DemiBold))
     initial = app_name[0].upper() if app_name else "?"
     painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, initial)
     painter.end()

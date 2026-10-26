@@ -28,3 +28,11 @@ live_state.json
 build/
 dist/
 *.spec
+*.egg-info/
+packaging/arch/src/
+packaging/arch/pkg/
+packaging/arch/*.tar.gz
+packaging/arch/*.pkg.tar.*
+
+# Windows build outputs
+packaging/windows/qhealth.ico

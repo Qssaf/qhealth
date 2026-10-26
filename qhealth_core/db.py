@@ -1,14 +1,18 @@
 import os
 import re
+import json
+import time
 import urllib.parse
 import sqlite3
 import datetime
+import threading
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from contextlib import contextmanager
 from .app_resolver import app_resolver
+from .paths import DATA_DIR
 
-DB_DIR = Path.home() / ".local" / "share" / "qhealth"
+DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "qhealth.db"
 
 EXCLUDED_APP_IDS_SQL = "('desktop', 'desktop / idle', 'idle', 'plasmashell', 'org.kde.plasmashell', 'plasma', 'krunner', '')"
@@ -50,20 +54,68 @@ RE_LEAD_CHARS = re.compile(r"^[•\*\s\-_]+")
 RE_GH_REPO = re.compile(r"^([a-zA-Z0-9_\-\.]+/[a-zA-Z0-9_\-\.]+)(?::\s*(.*))?$")
 RE_DOMAIN = re.compile(r"\b([a-zA-Z0-9-]+\.(?:com|org|net|io|dev|app|ai|me|cc|gg|tv|so|co|edu|gov|xyz|info))\b", re.IGNORECASE)
 
+_local = threading.local()
+
 @contextmanager
 def get_db():
-    DB_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 5000;")
-    conn.execute("PRAGMA synchronous = NORMAL;")
-    conn.execute("PRAGMA cache_size = -16000;")
-    conn.execute("PRAGMA mmap_size = 67108864;")
-    conn.execute("PRAGMA temp_store = MEMORY;")
+    """One long-lived connection per thread (re-opened if DB_PATH changes).
+    Opening a connection + pragmas on every call dominated the 1 s daemon loop and GUI polls.
+    Anything left uncommitted is rolled back when the outermost block exits, exactly as close() used to."""
+    conn = getattr(_local, "conn", None)
+    if conn is None or getattr(_local, "path", None) != DB_PATH:
+        if conn is not None:
+            conn.close()
+        DB_DIR.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(DB_PATH, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 5000;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA cache_size = -16000;")
+        conn.execute("PRAGMA mmap_size = 67108864;")
+        conn.execute("PRAGMA temp_store = MEMORY;")
+        _local.conn, _local.path, _local.depth = conn, DB_PATH, 0
+    _local.depth += 1
     try:
         yield conn
     finally:
+        _local.depth -= 1
+        if _local.depth == 0 and conn.in_transaction:
+            conn.rollback()
+
+def close_connection():
+    """Close this thread's cached connection, e.g. before deleting the DB file (Windows refuses while it's open)."""
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
         conn.close()
+        _local.conn = None
+
+def data_version() -> Tuple:
+    """Cheap change detector: the DB / WAL files' mtime+size move on every commit from any process."""
+    sig = []
+    for path in (DB_PATH, DB_PATH.with_name(DB_PATH.name + "-wal")):
+        try:
+            st = path.stat()
+            sig.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            sig.append(None)
+    return tuple(sig)
+
+def _range_bounds(range_type: str, target_date: Optional[str]) -> Tuple[str, datetime.date, str, List[str]]:
+    """(target_date, anchor_date, SQL condition on date_str, params) for a range ending on target_date."""
+    today = datetime.date.today()
+    if not target_date:
+        target_date = today.strftime("%Y-%m-%d")
+    try:
+        anchor_date = datetime.datetime.strptime(target_date, "%Y-%m-%d").date()
+    except Exception:
+        anchor_date = today
+    span = {"week": 6, "month": 29, "year": 364}.get(range_type)
+    if span is not None:
+        start_date = (anchor_date - datetime.timedelta(days=span)).strftime("%Y-%m-%d")
+        return target_date, anchor_date, "date_str >= ? AND date_str <= ?", [start_date, target_date]
+    if range_type == "all_time":
+        return target_date, anchor_date, "1=1", []
+    return target_date, anchor_date, "date_str = ?", [target_date]
 
 def get_category_for_app(app_id: str, app_name: str) -> str:
     app_lower = (app_id or "").lower()
@@ -175,7 +227,91 @@ def init_db(force: bool = False):
             pass
         
         conn.commit()
+
+        if cursor.execute("PRAGMA user_version").fetchone()[0] < 1:
+            _migrate_daily_rollup(conn)
         _db_initialized = True
+
+# Per (day, app) totals kept in sync with activity_log by triggers, so week / month / year /
+# all-time views aggregate a few hundred rows instead of every (hour, app, window title) row.
+_ROLLUP_SQL = """
+CREATE TABLE IF NOT EXISTS daily_app_stats (
+    date_str TEXT NOT NULL,
+    app_id TEXT NOT NULL,
+    app_name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    duration_seconds INTEGER NOT NULL DEFAULT 0,
+    keystrokes INTEGER NOT NULL DEFAULT 0,
+    clicks INTEGER NOT NULL DEFAULT 0,
+    scrolls INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (date_str, app_id, category)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_daily_app ON daily_app_stats(app_id, date_str);
+CREATE INDEX IF NOT EXISTS idx_act_name_date ON activity_log(app_name, date_str);
+
+CREATE TRIGGER IF NOT EXISTS trg_daily_ins AFTER INSERT ON activity_log BEGIN
+    INSERT INTO daily_app_stats (date_str, app_id, app_name, category, duration_seconds, keystrokes, clicks, scrolls)
+    VALUES (NEW.date_str, NEW.app_id, NEW.app_name, NEW.category, NEW.duration_seconds, NEW.keystrokes, NEW.clicks, NEW.scrolls)
+    ON CONFLICT(date_str, app_id, category) DO UPDATE SET
+        duration_seconds = duration_seconds + excluded.duration_seconds,
+        keystrokes = keystrokes + excluded.keystrokes,
+        clicks = clicks + excluded.clicks,
+        scrolls = scrolls + excluded.scrolls,
+        app_name = excluded.app_name;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_daily_upd AFTER UPDATE ON activity_log BEGIN
+    UPDATE daily_app_stats SET
+        duration_seconds = duration_seconds - OLD.duration_seconds,
+        keystrokes = keystrokes - OLD.keystrokes,
+        clicks = clicks - OLD.clicks,
+        scrolls = scrolls - OLD.scrolls
+    WHERE date_str = OLD.date_str AND app_id = OLD.app_id AND category = OLD.category;
+    INSERT INTO daily_app_stats (date_str, app_id, app_name, category, duration_seconds, keystrokes, clicks, scrolls)
+    VALUES (NEW.date_str, NEW.app_id, NEW.app_name, NEW.category, NEW.duration_seconds, NEW.keystrokes, NEW.clicks, NEW.scrolls)
+    ON CONFLICT(date_str, app_id, category) DO UPDATE SET
+        duration_seconds = duration_seconds + excluded.duration_seconds,
+        keystrokes = keystrokes + excluded.keystrokes,
+        clicks = clicks + excluded.clicks,
+        scrolls = scrolls + excluded.scrolls,
+        app_name = excluded.app_name;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_daily_del AFTER DELETE ON activity_log BEGIN
+    UPDATE daily_app_stats SET
+        duration_seconds = duration_seconds - OLD.duration_seconds,
+        keystrokes = keystrokes - OLD.keystrokes,
+        clicks = clicks - OLD.clicks,
+        scrolls = scrolls - OLD.scrolls
+    WHERE date_str = OLD.date_str AND app_id = OLD.app_id AND category = OLD.category;
+END;
+"""
+
+def _migrate_daily_rollup(conn: sqlite3.Connection):
+    """Schema v1: create + backfill the rollup in one write transaction (safe if daemon and GUI race)."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if conn.execute("PRAGMA user_version").fetchone()[0] >= 1:
+            conn.rollback()
+            return
+        stmt = ""
+        for line in _ROLLUP_SQL.splitlines(keepends=True):
+            stmt += line
+            if sqlite3.complete_statement(stmt):
+                conn.execute(stmt)
+                stmt = ""
+        conn.execute("DELETE FROM daily_app_stats")
+        conn.execute("""
+        INSERT INTO daily_app_stats (date_str, app_id, app_name, category, duration_seconds, keystrokes, clicks, scrolls)
+        SELECT date_str, app_id, MAX(app_name), category,
+               SUM(duration_seconds), SUM(keystrokes), SUM(clicks), SUM(scrolls)
+        FROM activity_log GROUP BY date_str, app_id, category
+        """)
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 def set_app_budget(app_id: str, daily_limit_minutes: int, enabled: bool = True, block_on_exceed: bool = True):
     init_db()
@@ -222,7 +358,7 @@ def get_exceeded_app_budgets(date_str: Optional[str] = None) -> Dict[str, Dict[s
             b.block_on_exceed,
             COALESCE(SUM(a.duration_seconds), 0) as used_seconds
         FROM app_budgets b
-        LEFT JOIN activity_log a ON LOWER(a.app_id) = LOWER(b.app_id) AND a.date_str = ?
+        LEFT JOIN daily_app_stats a ON LOWER(a.app_id) = LOWER(b.app_id) AND a.date_str = ?
         WHERE b.enabled = 1 AND b.daily_limit_minutes > 0
         GROUP BY b.app_id
         HAVING used_seconds >= (b.daily_limit_minutes * 60)
@@ -248,7 +384,7 @@ def get_activity_streak_stats() -> Dict[str, Any]:
         cursor = conn.cursor()
         cursor.execute(f"""
         SELECT DISTINCT date_str
-        FROM activity_log
+        FROM daily_app_stats
         WHERE LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL} AND duration_seconds > 0
         ORDER BY date_str DESC
         """)
@@ -258,7 +394,7 @@ def get_activity_streak_stats() -> Dict[str, Any]:
         SELECT 
             COALESCE(SUM(duration_seconds), 0) as total_dur,
             COALESCE(SUM(keystrokes), 0) as total_keys
-        FROM activity_log
+        FROM daily_app_stats
         WHERE LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         """)
         totals = cursor.fetchone()
@@ -277,7 +413,7 @@ def get_activity_streak_stats() -> Dict[str, Any]:
         check_date -= datetime.timedelta(days=1)
 
     # Longest streak calculation
-    sorted_dates = sorted([datetime.datetime.strptime(d, "%Y-%m-%d").date() for d in active_dates])
+    sorted_dates = sorted(datetime.date.fromisoformat(d) for d in active_dates)
     longest_streak = 0
     temp_streak = 0
     prev_date = None
@@ -365,6 +501,97 @@ def toggle_pause_setting() -> bool:
 def is_paused_setting() -> bool:
     return get_setting("paused", "false").lower() == "true"
 
+def get_focus_session() -> Dict[str, Any]:
+    """
+    Retrieves the current focus session state.
+    Returns:
+        {
+            "active": bool,
+            "end_time": float,
+            "duration_minutes": int,
+            "allowed_apps": List[str],
+            "remaining_seconds": int
+        }
+    """
+    raw = get_setting("focus_session", "")
+    if not raw:
+        return {
+            "active": False,
+            "end_time": 0.0,
+            "duration_minutes": 0,
+            "allowed_apps": [],
+            "remaining_seconds": 0
+        }
+    try:
+        data = json.loads(raw)
+        end_time = float(data.get("end_time", 0.0))
+        now = time.time()
+        active = bool(data.get("active", False)) and (now < end_time)
+        remaining = max(0, int(end_time - now)) if active else 0
+
+        # If expired but still marked active in DB, deactivate it
+        if bool(data.get("active", False)) and not active:
+            data["active"] = False
+            set_setting("focus_session", json.dumps(data))
+
+        return {
+            "active": active,
+            "end_time": end_time,
+            "duration_minutes": int(data.get("duration_minutes", 0)),
+            "allowed_apps": [a.lower().strip() for a in data.get("allowed_apps", []) if a],
+            "remaining_seconds": remaining
+        }
+    except Exception:
+        return {
+            "active": False,
+            "end_time": 0.0,
+            "duration_minutes": 0,
+            "allowed_apps": [],
+            "remaining_seconds": 0
+        }
+
+def start_focus_session(duration_minutes: int, allowed_apps: List[str]) -> Dict[str, Any]:
+    """
+    Starts a new focus session.
+    duration_minutes: duration in minutes (e.g. 60 for 1 hour).
+    allowed_apps: list of app_ids that are allowed to run (e.g. ['code', 'brave-browser']).
+    """
+    now = time.time()
+    end_time = now + (duration_minutes * 60)
+    cleaned_apps = list({a.lower().strip() for a in allowed_apps if a and a.strip()})
+    session_data = {
+        "active": True,
+        "start_time": now,
+        "end_time": end_time,
+        "duration_minutes": duration_minutes,
+        "allowed_apps": cleaned_apps
+    }
+    set_setting("focus_session", json.dumps(session_data))
+    return {
+        "active": True,
+        "end_time": end_time,
+        "duration_minutes": duration_minutes,
+        "allowed_apps": cleaned_apps,
+        "remaining_seconds": int(duration_minutes * 60)
+    }
+
+def stop_focus_session():
+    """Ends the active focus session."""
+    raw = get_setting("focus_session", "")
+    if raw:
+        try:
+            data = json.loads(raw)
+            data["active"] = False
+            set_setting("focus_session", json.dumps(data))
+        except Exception:
+            set_setting("focus_session", "")
+    else:
+        set_setting("focus_session", "")
+
+def is_focus_active() -> bool:
+    session = get_focus_session()
+    return session.get("active", False)
+
 def record_input_heatmap_chunk(key_counts: Dict[int, int], mouse_counts: Dict[str, int]):
     if not key_counts and not mouse_counts:
         return
@@ -391,38 +618,10 @@ def record_input_heatmap_chunk(key_counts: Dict[int, int], mouse_counts: Dict[st
 
 def get_keyboard_heatmap_data(range_type: str = "day", target_date: Optional[str] = None) -> Dict[int, int]:
     init_db()
-    today = datetime.date.today()
-    if not target_date:
-        target_date = today.strftime("%Y-%m-%d")
-
-    try:
-        anchor_date = datetime.datetime.strptime(target_date, "%Y-%m-%d").date()
-    except Exception:
-        anchor_date = today
+    target_date, anchor_date, date_condition, params = _range_bounds(range_type, target_date)
 
     with get_db() as conn:
         cursor = conn.cursor()
-        if range_type == "day":
-            date_condition = "date_str = ?"
-            params = [target_date]
-        elif range_type == "week":
-            start_date = (anchor_date - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
-            date_condition = "date_str >= ? AND date_str <= ?"
-            params = [start_date, target_date]
-        elif range_type == "month":
-            start_date = (anchor_date - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
-            date_condition = "date_str >= ? AND date_str <= ?"
-            params = [start_date, target_date]
-        elif range_type == "year":
-            start_date = (anchor_date - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
-            date_condition = "date_str >= ? AND date_str <= ?"
-            params = [start_date, target_date]
-        elif range_type == "all_time":
-            date_condition = "1=1"
-            params = []
-        else:
-            date_condition = "date_str = ?"
-            params = [target_date]
 
         cursor.execute(f"""
         SELECT key_code, SUM(count) as total_count
@@ -434,38 +633,10 @@ def get_keyboard_heatmap_data(range_type: str = "day", target_date: Optional[str
 
 def get_mouse_heatmap_data(range_type: str = "day", target_date: Optional[str] = None) -> Dict[str, int]:
     init_db()
-    today = datetime.date.today()
-    if not target_date:
-        target_date = today.strftime("%Y-%m-%d")
-
-    try:
-        anchor_date = datetime.datetime.strptime(target_date, "%Y-%m-%d").date()
-    except Exception:
-        anchor_date = today
+    target_date, anchor_date, date_condition, params = _range_bounds(range_type, target_date)
 
     with get_db() as conn:
         cursor = conn.cursor()
-        if range_type == "day":
-            date_condition = "date_str = ?"
-            params = [target_date]
-        elif range_type == "week":
-            start_date = (anchor_date - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
-            date_condition = "date_str >= ? AND date_str <= ?"
-            params = [start_date, target_date]
-        elif range_type == "month":
-            start_date = (anchor_date - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
-            date_condition = "date_str >= ? AND date_str <= ?"
-            params = [start_date, target_date]
-        elif range_type == "year":
-            start_date = (anchor_date - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
-            date_condition = "date_str >= ? AND date_str <= ?"
-            params = [start_date, target_date]
-        elif range_type == "all_time":
-            date_condition = "1=1"
-            params = []
-        else:
-            date_condition = "date_str = ?"
-            params = [target_date]
 
         cursor.execute(f"""
         SELECT button_name, SUM(count) as total_count
@@ -518,39 +689,10 @@ def record_activity_chunk(
 
 def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = None) -> Dict[str, Any]:
     init_db()
-    today = datetime.date.today()
-    if not target_date:
-        target_date = today.strftime("%Y-%m-%d")
-
-    try:
-        anchor_date = datetime.datetime.strptime(target_date, "%Y-%m-%d").date()
-    except Exception:
-        anchor_date = today
+    target_date, anchor_date, date_condition, params = _range_bounds(range_type, target_date)
 
     with get_db() as conn:
         cursor = conn.cursor()
-
-        if range_type == "day":
-            date_condition = "date_str = ?"
-            params = [target_date]
-        elif range_type == "week":
-            start_date = (anchor_date - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
-            date_condition = "date_str >= ? AND date_str <= ?"
-            params = [start_date, target_date]
-        elif range_type == "month":
-            start_date = (anchor_date - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
-            date_condition = "date_str >= ? AND date_str <= ?"
-            params = [start_date, target_date]
-        elif range_type == "year":
-            start_date = (anchor_date - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
-            date_condition = "date_str >= ? AND date_str <= ?"
-            params = [start_date, target_date]
-        elif range_type == "all_time":
-            date_condition = "1=1"
-            params = []
-        else:
-            date_condition = "date_str = ?"
-            params = [target_date]
 
         # 1. Total Summary
         cursor.execute(f"""
@@ -559,7 +701,7 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
             COALESCE(SUM(keystrokes), 0) as total_keystrokes,
             COALESCE(SUM(clicks), 0) as total_clicks,
             COALESCE(SUM(scrolls), 0) as total_scrolls
-        FROM activity_log
+        FROM daily_app_stats
         WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         """, params)
         total_row = cursor.fetchone()
@@ -575,10 +717,10 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
             SUM(keystrokes) as keystrokes,
             SUM(clicks) as clicks,
             SUM(scrolls) as scrolls
-        FROM activity_log
+        FROM daily_app_stats
         WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         GROUP BY app_id
-        ORDER BY duration DESC
+        ORDER BY duration DESC, app_id
         """, params)
         apps = [dict(row) for row in cursor.fetchall()]
         budgets = get_all_app_budgets()
@@ -624,7 +766,7 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
             SUM(duration_seconds) as duration,
             SUM(keystrokes) as keystrokes,
             SUM(clicks) as clicks
-        FROM activity_log
+        FROM daily_app_stats
         WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         GROUP BY category
         ORDER BY duration DESC
@@ -660,7 +802,7 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
                 SUM(duration_seconds) as duration,
                 SUM(keystrokes) as keystrokes,
                 SUM(clicks) as clicks
-            FROM activity_log
+            FROM daily_app_stats
             WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
             GROUP BY date_str
             ORDER BY date_str ASC
@@ -686,7 +828,7 @@ def get_stats_by_range(range_type: str = "day", target_date: Optional[str] = Non
                 SUM(duration_seconds) as duration,
                 SUM(keystrokes) as keystrokes,
                 SUM(clicks) as clicks
-            FROM activity_log
+            FROM daily_app_stats
             WHERE {date_condition} AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
             GROUP BY month_str
             ORDER BY month_str ASC
@@ -757,7 +899,7 @@ def get_activity_heatmap_data(days: int = 70) -> List[Dict[str, Any]]:
             SUM(duration_seconds) as duration,
             SUM(keystrokes) as keystrokes,
             SUM(clicks) as clicks
-        FROM activity_log
+        FROM daily_app_stats
         WHERE date_str >= ? AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         GROUP BY date_str
         ORDER BY date_str ASC
@@ -1001,6 +1143,7 @@ def vacuum_and_cleanup_db():
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM activity_log WHERE duration_seconds <= 0 AND keystrokes <= 0 AND clicks <= 0 AND scrolls <= 0")
+        cursor.execute("DELETE FROM daily_app_stats WHERE duration_seconds <= 0 AND keystrokes <= 0 AND clicks <= 0 AND scrolls <= 0")
         conn.commit()
         try:
             cursor.execute("PRAGMA wal_checkpoint(PASSIVE);")
@@ -1017,39 +1160,10 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
     Returns specific drilldown metrics, range-adjusted timeline, and detailed per-page/website/channel breakdown.
     """
     init_db()
-    today = datetime.date.today()
-    if not target_date:
-        target_date = today.strftime("%Y-%m-%d")
-
-    try:
-        anchor_date = datetime.datetime.strptime(target_date, "%Y-%m-%d").date()
-    except Exception:
-        anchor_date = today
+    target_date, anchor_date, date_condition, params = _range_bounds(range_type, target_date)
 
     with get_db() as conn:
         cursor = conn.cursor()
-
-        if range_type == "day":
-            date_condition = "date_str = ?"
-            params = [target_date]
-        elif range_type == "week":
-            start_date = (anchor_date - datetime.timedelta(days=6)).strftime("%Y-%m-%d")
-            date_condition = "date_str >= ? AND date_str <= ?"
-            params = [start_date, target_date]
-        elif range_type == "month":
-            start_date = (anchor_date - datetime.timedelta(days=29)).strftime("%Y-%m-%d")
-            date_condition = "date_str >= ? AND date_str <= ?"
-            params = [start_date, target_date]
-        elif range_type == "year":
-            start_date = (anchor_date - datetime.timedelta(days=364)).strftime("%Y-%m-%d")
-            date_condition = "date_str >= ? AND date_str <= ?"
-            params = [start_date, target_date]
-        elif range_type == "all_time":
-            date_condition = "1=1"
-            params = []
-        else:
-            date_condition = "date_str = ?"
-            params = [target_date]
 
         # 1. Summary stats for this app in the selected range
         summary_query = f"""
@@ -1062,7 +1176,7 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
             COALESCE(SUM(clicks), 0) as total_clicks,
             COALESCE(SUM(scrolls), 0) as total_scrolls,
             COUNT(DISTINCT date_str) as active_days
-        FROM activity_log
+        FROM daily_app_stats
         WHERE (app_id = ? OR app_name = ?) AND {date_condition}
         """
         cursor.execute(summary_query, [app_id, app_id] + params)
@@ -1105,7 +1219,7 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
                 SUM(duration_seconds) as duration,
                 SUM(keystrokes) as keystrokes,
                 SUM(clicks) as clicks
-            FROM activity_log
+            FROM daily_app_stats
             WHERE (app_id = ? OR app_name = ?) AND {date_condition}
             GROUP BY date_str
             ORDER BY date_str ASC
@@ -1130,7 +1244,7 @@ def get_app_detail_stats(app_id: str, range_type: str = "day", target_date: Opti
                 SUM(duration_seconds) as duration,
                 SUM(keystrokes) as keystrokes,
                 SUM(clicks) as clicks
-            FROM activity_log
+            FROM daily_app_stats
             WHERE (app_id = ? OR app_name = ?) AND {date_condition}
             GROUP BY month_str
             ORDER BY month_str ASC
@@ -1250,7 +1364,7 @@ def get_month_activity_map(year: int, month: int) -> Dict[str, Dict[str, Any]]:
             SUM(duration_seconds) as duration,
             SUM(keystrokes) as keystrokes,
             SUM(clicks) as clicks
-        FROM activity_log
+        FROM daily_app_stats
         WHERE date_str LIKE ? AND LOWER(app_id) NOT IN {EXCLUDED_APP_IDS_SQL}
         GROUP BY date_str
         """, (prefix,))
@@ -1331,6 +1445,11 @@ def export_data_to_csv(file_path: str, range_type: str = "all_time", target_date
         """, params)
         rows = cursor.fetchall()
 
+    def _sanitize_csv_field(val: Any) -> Any:
+        if isinstance(val, str) and val and val[0] in ("=", "+", "-", "@", "\t", "\r"):
+            return f"'{val}"
+        return val
+
     with open(file_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["Date", "Hour", "Application", "App ID", "Category", "Window Title", "Duration (Seconds)", "Duration (Formatted)", "Keystrokes", "Clicks", "Scrolls"])
@@ -1340,12 +1459,12 @@ def export_data_to_csv(file_path: str, range_type: str = "all_time", target_date
             secs = dur % 60
             dur_fmt = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
             writer.writerow([
-                r["date_str"],
-                f"{r['hour_int']:02d}:00",
-                r["app_name"],
-                r["app_id"],
-                r["category"],
-                r["window_title"] or "",
+                _sanitize_csv_field(r["date_str"]),
+                _sanitize_csv_field(f"{r['hour_int']:02d}:00"),
+                _sanitize_csv_field(r["app_name"]),
+                _sanitize_csv_field(r["app_id"]),
+                _sanitize_csv_field(r["category"]),
+                _sanitize_csv_field(r["window_title"] or ""),
                 dur,
                 dur_fmt,
                 r["keystrokes"],

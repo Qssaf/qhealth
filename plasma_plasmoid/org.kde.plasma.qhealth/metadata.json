@@ -11,7 +11,7 @@
         "Icon": "qhealth",
         "Id": "org.kde.plasma.qhealth",
         "Name": "QHealth Status",
-        "Version": "2.2",
+        "Version": "3.0.0",
         "Website": "https://github.com/Qssaf/qhealth"
     },
     "KPackageStructure": "Plasma/Applet"

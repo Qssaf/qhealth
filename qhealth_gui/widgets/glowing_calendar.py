@@ -1,28 +1,21 @@
 import calendar
 import datetime
-from typing import Dict, Any, Callable, Optional
-from PyQt6.QtCore import Qt, QDate, QPoint, pyqtSignal
-from PyQt6.QtWidgets import (
-    QWidget, QDialog, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGridLayout, QSizePolicy
-)
-from PyQt6.QtGui import QColor, QFont, QCursor
+from typing import Dict, Any
+from PyQt6.QtCore import Qt, QPoint, pyqtSignal
+from PyQt6.QtWidgets import QWidget, QDialog, QFrame, QVBoxLayout, QHBoxLayout, QPushButton, QGridLayout
 from qhealth_core.db import get_month_activity_map
+from .. import theme as t
+from ..icons import icon
 from ..utils import format_duration, format_number
+from .common import RampLegend
 
 MONTH_NAMES = [
     "", "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December"
 ]
 
-WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+WEEKDAY_LABELS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
 
-GLOW_STYLES = {
-    0: "background-color: rgba(22, 31, 48, 0.4); border: 1px solid rgba(255, 255, 255, 0.05); color: #94a3b8;",
-    1: "background-color: #064e3b; border: 1px solid #047857; color: #a7f3d0;",
-    2: "background-color: #047857; border: 1px solid #10b981; color: #ffffff;",
-    3: "background-color: #059669; border: 1px solid #34d399; color: #ffffff; font-weight: bold;",
-    4: "background-color: #10b981; border: 1px solid #6ee7b7; color: #ffffff; font-weight: 800;",
-}
 
 class GlowingDayCell(QPushButton):
     def __init__(self, day_num: int, date_str: str, is_current_month: bool, is_selected: bool, is_today: bool, activity: Dict[str, Any], parent=None):
@@ -30,45 +23,41 @@ class GlowingDayCell(QPushButton):
         self.date_str = date_str
         self.day_num = day_num
         self.is_current_month = is_current_month
-        self.setFixedSize(38, 38)
+        self.setFixedSize(36, 36)
         self.setCursor(Qt.CursorShape.PointingHandCursor if is_current_month else Qt.CursorShape.ArrowCursor)
 
-        level = activity.get("level", 0) if (activity and is_current_month) else 0
-        base_style = GLOW_STYLES.get(level, GLOW_STYLES[0])
-
         if not is_current_month:
-            self.setStyleSheet("background-color: transparent; border: none; color: #334155;")
+            self.setStyleSheet("background: transparent; border: none;")
             self.setEnabled(False)
+            return
+
+        level = activity.get("level", 0) if activity else 0
+        bg = t.heat(t.SERIES_TIME, level / 4.0) if level else None
+        fg = t.ink_on(bg).name() if bg else t.TEXT_2
+        if is_selected:
+            border = f"2px solid {t.TEXT}"
+        elif is_today:
+            border = f"1px solid {t.ACCENT}"
         else:
-            border_extra = ""
-            if is_selected:
-                border_extra = "border: 2px solid #22d3ee;"
-            elif is_today:
-                border_extra = "border: 1.5px solid #fbbf24;"
+            border = "1px solid transparent"
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background: {bg.name() if bg else 'transparent'}; color: {fg};
+                border: {border}; border-radius: 8px; padding: 0px;
+                font-size: 12px; font-weight: {600 if (is_today or is_selected) else 500};
+            }}
+            QPushButton:hover {{ border: {'2px' if is_selected else '1px'} solid {t.TEXT_2}; }}
+            QPushButton:focus {{ border: 2px solid {t.ACCENT}; }}
+        """)
 
-            self.setStyleSheet(f"""
-                QPushButton {{
-                    {base_style}
-                    border-radius: 8px;
-                    font-family: 'Inter', sans-serif;
-                    font-size: 12px;
-                    {border_extra}
-                }}
-                QPushButton:hover {{
-                    border: 1.5px solid #34d399;
-                    background-color: rgba(16, 185, 129, 0.35);
-                    color: #ffffff;
-                }}
-            """)
-
-            # Tooltip with exact day metrics
-            if activity and activity.get("duration", 0) > 0:
-                dur_str = format_duration(activity["duration"])
-                keys_str = format_number(activity.get("keystrokes", 0))
-                clicks_str = format_number(activity.get("clicks", 0))
-                self.setToolTip(f"📅 {date_str}\n⏱ Active: {dur_str}\n⌨ Keys: {keys_str} · 🖱 Clicks: {clicks_str}")
-            else:
-                self.setToolTip(f"📅 {date_str}\nNo screen time recorded")
+        if activity and activity.get("duration", 0) > 0:
+            self.setToolTip(
+                f"{date_str}\nActive {format_duration(activity['duration'])}  ·  "
+                f"{format_number(activity.get('keystrokes', 0))} keys  ·  {format_number(activity.get('clicks', 0))} clicks"
+            )
+        else:
+            self.setToolTip(f"{date_str}\nNo screen time recorded")
+        self.setAccessibleName(date_str)
 
 
 class GlowingCalendarPopup(QDialog):
@@ -87,42 +76,9 @@ class GlowingCalendarPopup(QDialog):
         self.view_year = d.year
         self.view_month = d.month
 
-        self.setStyleSheet("""
-            QDialog {
-                background: transparent;
-            }
-            QFrame#CalendarContainer {
-                background-color: #0c1017;
-                border: 1px solid rgba(255, 255, 255, 0.12);
-                border-radius: 14px;
-            }
-            QPushButton.NavBtn {
-                background-color: rgba(30, 41, 59, 0.6);
-                border: 1px solid rgba(255, 255, 255, 0.08);
-                color: #cbd5e1;
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: bold;
-                font-size: 13px;
-            }
-            QPushButton.NavBtn:hover {
-                background-color: rgba(51, 65, 85, 0.8);
-                color: #ffffff;
-                border-color: rgba(255, 255, 255, 0.2);
-            }
-            QPushButton.TodayBtn {
-                background-color: rgba(16, 185, 129, 0.15);
-                border: 1px solid rgba(16, 185, 129, 0.3);
-                color: #34d399;
-                border-radius: 6px;
-                padding: 3px 8px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QPushButton.TodayBtn:hover {
-                background-color: rgba(16, 185, 129, 0.25);
-                color: #ffffff;
-            }
+        self.setStyleSheet(f"""
+            QDialog {{ background: transparent; }}
+            QFrame#CalendarContainer {{ background: {t.OVERLAY}; border: 1px solid {t.BORDER_STRONG}; border-radius: 14px; }}
         """)
 
         main_lay = QVBoxLayout(self)
@@ -132,84 +88,69 @@ class GlowingCalendarPopup(QDialog):
         self.container.setObjectName("CalendarContainer")
         self.c_lay = QVBoxLayout(self.container)
         self.c_lay.setContentsMargins(16, 14, 16, 14)
-        self.c_lay.setSpacing(12)
+        self.c_lay.setSpacing(10)
         main_lay.addWidget(self.container)
 
-        # 1. Navigation Header (< Month Year > Today)
+        # 1. Header: ‹ Month Year › · Today
         hdr = QHBoxLayout()
-        hdr.setSpacing(8)
-
-        self.btn_prev = QPushButton("‹")
-        self.btn_prev.setProperty("class", "NavBtn")
-        self.btn_prev.clicked.connect(self._prev_month)
-        hdr.addWidget(self.btn_prev)
-
-        self.title_lbl = QLabel()
-        self.title_lbl.setStyleSheet("font-size: 14px; font-weight: 800; color: #ffffff;")
-        self.title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hdr.setSpacing(6)
+        self.title_lbl = t.label("", "h2")
         hdr.addWidget(self.title_lbl, 1)
 
-        self.btn_next = QPushButton("›")
-        self.btn_next.setProperty("class", "NavBtn")
-        self.btn_next.clicked.connect(self._next_month)
-        hdr.addWidget(self.btn_next)
-
         self.btn_today = QPushButton("Today")
-        self.btn_today.setProperty("class", "TodayBtn")
+        self.btn_today.setProperty("class", "Ghost")
         self.btn_today.clicked.connect(self._go_today)
         hdr.addWidget(self.btn_today)
 
+        self.btn_prev = QPushButton()
+        self.btn_next = QPushButton()
+        for btn, name, tip, slot in ((self.btn_prev, "chevron-left", "Previous month", self._prev_month),
+                                     (self.btn_next, "chevron-right", "Next month", self._next_month)):
+            btn.setProperty("class", "Icon")
+            btn.setIcon(icon(name, t.TEXT_2, size=16))
+            btn.setFixedSize(30, 30)
+            btn.setToolTip(tip)
+            btn.setAccessibleName(tip)
+            btn.clicked.connect(slot)
+            hdr.addWidget(btn)
         self.c_lay.addLayout(hdr)
 
-        # 2. Weekday Header Row (Mon..Sun)
+        # 2. Weekday header
         w_hdr = QGridLayout()
-        w_hdr.setSpacing(6)
+        w_hdr.setSpacing(4)
         for col_idx, w_name in enumerate(WEEKDAY_LABELS):
-            lbl = QLabel(w_name)
+            lbl = t.label(w_name, "overline")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet("color: #64748b; font-size: 11px; font-weight: 600;")
+            lbl.setFixedWidth(36)
             w_hdr.addWidget(lbl, 0, col_idx)
         self.c_lay.addLayout(w_hdr)
 
-        # 3. Days Grid
+        # 3. Days grid
         self.grid_widget = QWidget()
         self.grid_lay = QGridLayout(self.grid_widget)
         self.grid_lay.setContentsMargins(0, 0, 0, 0)
-        self.grid_lay.setSpacing(6)
+        self.grid_lay.setSpacing(4)
         self.c_lay.addWidget(self.grid_widget)
 
-        # 4. Glow Legend
+        # 4. Legend
         leg_lay = QHBoxLayout()
-        leg_lay.setSpacing(6)
-        leg_title = QLabel("Activity Glow:")
-        leg_title.setStyleSheet("color: #64748b; font-size: 10px;")
-        leg_lay.addWidget(leg_title)
-
-        for lvl, bg_c in [(0, "#161f30"), (1, "#064e3b"), (2, "#047857"), (3, "#10b981"), (4, "#34d399")]:
-            dot = QLabel()
-            dot.setFixedSize(10, 10)
-            dot.setStyleSheet(f"background-color: {bg_c}; border-radius: 2px;")
-            leg_lay.addWidget(dot)
-
+        leg_lay.addWidget(t.label("Screen time", "caption"))
         leg_lay.addStretch()
+        leg_lay.addWidget(RampLegend(t.SERIES_TIME))
         self.c_lay.addLayout(leg_lay)
 
         self._render_calendar()
 
     def _render_calendar(self):
-        # Update Header Title
         self.title_lbl.setText(f"{MONTH_NAMES[self.view_month]} {self.view_year}")
-
-        # Fetch month activity map from DB for glow levels
         month_activity = get_month_activity_map(self.view_year, self.view_month)
 
-        # Clear existing grid items
         while self.grid_lay.count():
             item = self.grid_lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
-        cal = calendar.Calendar(firstweekday=0) # Monday first
+        cal = calendar.Calendar(firstweekday=0)  # Monday first
         month_days = cal.monthdayscalendar(self.view_year, self.view_month)
 
         today = datetime.date.today()
@@ -218,7 +159,6 @@ class GlowingCalendarPopup(QDialog):
         for row_idx, week in enumerate(month_days):
             for col_idx, day_num in enumerate(week):
                 if day_num == 0:
-                    # Empty cell (other month)
                     cell = GlowingDayCell(0, "", False, False, False, {})
                 else:
                     date_str = f"{self.view_year:04d}-{self.view_month:02d}-{day_num:02d}"
@@ -260,8 +200,9 @@ class GlowingDatePickerBtn(QPushButton):
 
     def __init__(self, initial_date_str: str = "", parent=None):
         super().__init__(parent)
-        self.setProperty("class", "ActionBtn")
+        self.setIcon(icon("calendar", t.TEXT_2, size=16))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Pick a date")
         self.current_date_str = initial_date_str if initial_date_str else datetime.date.today().strftime("%Y-%m-%d")
         self.clicked.connect(self._open_calendar_popup)
         self._update_button_label()
@@ -273,26 +214,26 @@ class GlowingDatePickerBtn(QPushButton):
     def _update_button_label(self):
         try:
             d = datetime.datetime.strptime(self.current_date_str, "%Y-%m-%d").date()
-            today = datetime.date.today()
-            if d == today:
-                formatted = f"📅 Today ({d.strftime('%b %d')}) ▾"
+            if d == datetime.date.today():
+                formatted = f"Today · {d.strftime('%b %d')}"
             else:
-                formatted = f"📅 {d.strftime('%b %d, %Y')} ▾"
+                formatted = d.strftime("%a, %b %d, %Y")
         except Exception:
-            formatted = f"📅 {self.current_date_str} ▾"
+            formatted = self.current_date_str
 
         self.setText(formatted)
+        self.setAccessibleName(f"Date: {formatted}. Open calendar")
 
     def _open_calendar_popup(self):
         popup = GlowingCalendarPopup(self.current_date_str, self)
         popup.dateSelected.connect(self._on_popup_date_selected)
-        
-        # Position popup directly below the button, clamped to screen bounds
-        btn_pos = self.mapToGlobal(QPoint(0, self.height() + 4))
+
+        # Position popup below the button, clamped to screen bounds
+        btn_pos = self.mapToGlobal(QPoint(0, self.height() + 6))
         if self.screen():
             geo = self.screen().availableGeometry()
-            popup_w = 340
-            popup_h = 360
+            popup_w = 320
+            popup_h = 380
             x = min(btn_pos.x(), geo.right() - popup_w - 8)
             x = max(geo.left() + 8, x)
             y = min(btn_pos.y(), geo.bottom() - popup_h - 8)

@@ -1,8 +1,7 @@
 import os
 import sys
 import json
-from pathlib import Path
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QObject, pyqtSignal
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu
@@ -10,15 +9,23 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QIcon, QAction
 
 from .tracker import ActivityTracker
-from .db import toggle_pause_setting, is_paused_setting, get_stats_by_range
+from . import notify
+from .paths import IS_WINDOWS, PID_FILE
+from .db import toggle_pause_setting, is_paused_setting, get_stats_by_range, get_focus_session, data_version
 from qhealth_gui.main_window import QHealthMainWindow, create_app_icon
 from qhealth_gui.utils import format_duration, format_number
 
 SOCKET_NAME = "qhealth_single_instance_socket"
-STATE_FILE = Path.home() / ".local" / "share" / "qhealth" / "live_state.json"
-PID_FILE = Path.home() / ".local" / "share" / "qhealth" / "daemon.pid"
+
+
+class _TrayNotifier(QObject):
+    """Carries notifications raised on tracker threads over to the GUI thread's tray icon."""
+    message = pyqtSignal(str, str, bool)
+
 
 def is_daemon_running() -> bool:
+    if IS_WINDOWS:
+        return False  # no separate daemon on Windows (and os.kill(pid, 0) would send Ctrl+C there)
     if PID_FILE.exists():
         try:
             pid = int(PID_FILE.read_text().strip())
@@ -30,6 +37,9 @@ def is_daemon_running() -> bool:
 
 class QHealthApp:
     def __init__(self):
+        if IS_WINDOWS:
+            from . import win32
+            win32.set_app_user_model_id()  # must precede any window so the taskbar shows QHealth's icon
         self.app = QApplication(sys.argv)
         self.app.setQuitOnLastWindowClosed(False)
         self.app.setApplicationName("QHealth")
@@ -43,15 +53,24 @@ class QHealthApp:
         if not self._check_single_instance():
             sys.exit(0)
 
+        self.daemon = None
         self.daemon_active = is_daemon_running()
-        if not self.daemon_active:
+        if IS_WINDOWS:
+            # Windows has no user-session service manager that can see the desktop, so the tray app
+            # runs the daemon loop itself (budgets, focus sessions, live state) for as long as it is open
+            from .daemon import QHealthDaemon
+            self.daemon = QHealthDaemon()
+            self.daemon.start_embedded()
+            self.tracker = self.daemon.tracker
+        elif not self.daemon_active:
             from .db import get_exceeded_app_budgets
             self.tracker = ActivityTracker()
             self.tracker.update_blocked_apps(get_exceeded_app_budgets())
+            self.tracker.update_focus_session(get_focus_session())
             self.tracker.start()
             self._block_sync_timer = QTimer()
-            self._block_sync_timer.timeout.connect(lambda: self.tracker.update_blocked_apps(get_exceeded_app_budgets()))
-            self._block_sync_timer.start(5000)
+            self._block_sync_timer.timeout.connect(self._sync_tracker_state)
+            self._block_sync_timer.start(3000)
         else:
             self.tracker = None
 
@@ -85,36 +104,17 @@ class QHealthApp:
                 self.show_window()
             client.disconnectFromServer()
 
+    def _sync_tracker_state(self):
+        if self.tracker:
+            from .db import get_exceeded_app_budgets
+            self.tracker.update_blocked_apps(get_exceeded_app_budgets())
+            self.tracker.update_focus_session(get_focus_session())
+
     def _setup_tray(self):
         self.tray = QSystemTrayIcon(self.icon, self.app)
         self.tray.setToolTip("QHealth — Digital Wellbeing & Activity Tracker")
 
         self.tray_menu = QMenu()
-        self.tray_menu.setStyleSheet("""
-            QMenu {
-                background-color: #0d131f;
-                color: #f1f5f9;
-                border: 1px solid rgba(255, 255, 255, 0.15);
-                border-radius: 8px;
-                padding: 4px;
-            }
-            QMenu::item {
-                padding: 6px 18px;
-                border-radius: 4px;
-            }
-            QMenu::item:disabled {
-                color: #64748b;
-            }
-            QMenu::item:selected {
-                background-color: rgba(16, 185, 129, 0.2);
-                color: #34d399;
-            }
-            QMenu::separator {
-                height: 1px;
-                background: rgba(255, 255, 255, 0.1);
-                margin: 4px 8px;
-            }
-        """)
 
         open_action = QAction("📊 Open QHealth Dashboard", self.app)
         open_action.triggered.connect(self.show_window)
@@ -131,11 +131,28 @@ class QHealthApp:
         self.top_app_action.setEnabled(False)
         self.tray_menu.addAction(self.top_app_action)
 
+        self.focus_action = QAction("🎯 Focus Mode: Inactive", self.app)
+        self.focus_action.triggered.connect(self._open_focus_dialog)
+        self.tray_menu.addAction(self.focus_action)
+
         self.tray_menu.addSeparator()
 
         self.pause_action = QAction("Pause Tracking", self.app)
         self.pause_action.triggered.connect(self._toggle_pause)
         self.tray_menu.addAction(self.pause_action)
+
+        if IS_WINDOWS:
+            from . import win32
+            self.autostart_action = QAction("Start with Windows", self.app)
+            self.autostart_action.setCheckable(True)
+            self.autostart_action.setChecked(win32.autostart_enabled())
+            self.autostart_action.toggled.connect(win32.set_autostart)
+            self.tray_menu.addAction(self.autostart_action)
+            # Notifications from the embedded daemon appear as tray balloons / toasts
+            self._notifier = _TrayNotifier()
+            self._notifier.message.connect(lambda title, msg, critical: self.tray.showMessage(
+                title, msg, QSystemTrayIcon.MessageIcon.Warning if critical else QSystemTrayIcon.MessageIcon.Information, 8000))
+            notify.set_handler(self._notifier.message.emit)
 
         self.tray_menu.addSeparator()
 
@@ -148,14 +165,26 @@ class QHealthApp:
         self.tray.show()
 
         # Tray refresh timer
+        self._tray_version = None
+        self._tray_stats = {}
         self.tray_timer = QTimer(self.app)
         self.tray_timer.timeout.connect(self._refresh_tray_stats)
         self.tray_timer.start(3000)
         self._refresh_tray_stats()
 
+    def _open_focus_dialog(self):
+        self.show_window()
+        if hasattr(self.window, "_open_focus_dialog"):
+            self.window._open_focus_dialog()
+
     def _refresh_tray_stats(self):
         try:
-            stats = get_stats_by_range("day")
+            # Re-aggregate today only when something was written since the last tick
+            version = data_version()
+            if version != self._tray_version:
+                self._tray_stats = get_stats_by_range("day")
+                self._tray_version = version
+            stats = self._tray_stats
             dur = stats.get("total_duration", 0)
             dur_str = format_duration(dur)
             keys = stats.get("total_keystrokes", 0)
@@ -166,6 +195,15 @@ class QHealthApp:
 
             self.stats_action.setText(f"⏱ Today: {dur_str} ({format_number(keys)} keys)")
             self.top_app_action.setText(f"🏆 Top: {top_name} ({top_pct}%)")
+
+            # Update focus action
+            focus_session = get_focus_session()
+            if focus_session.get("active"):
+                rem_secs = focus_session.get("remaining_seconds", 0)
+                rem_mins = max(1, (rem_secs + 59) // 60)
+                self.focus_action.setText(f"🎯 Focus: {rem_mins}m left (Click to manage)")
+            else:
+                self.focus_action.setText("🎯 Start Focus Session...")
 
             # Update tooltip
             paused = is_paused_setting()
@@ -206,7 +244,10 @@ class QHealthApp:
         if self.local_server:
             self.local_server.close()
             QLocalServer.removeServer(SOCKET_NAME)
-        if self.tracker:
+        notify.set_handler(None)
+        if self.daemon:
+            self.daemon.stop()
+        elif self.tracker:
             self.tracker.stop()
         self.app.quit()
 

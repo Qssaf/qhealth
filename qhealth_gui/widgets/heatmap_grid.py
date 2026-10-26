@@ -1,42 +1,50 @@
+import datetime
 from typing import List, Dict, Any
-from PyQt6.QtCore import Qt, QRectF, QPoint
-from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QToolTip, QSizePolicy
-from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QBrush
+from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QToolTip, QSizePolicy
+from PyQt6.QtGui import QPainter, QColor, QPen
+from .. import theme as t
 from ..utils import format_duration, format_number
+from .common import RampLegend, card_header
 
-HEATMAP_COLORS = [
-    QColor("#131a29"),
-    QColor("#064e3b"),
-    QColor("#047857"),
-    QColor("#0e7490"),
-    QColor("#38bdf8"),
-]
 
 class HeatmapPainter(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setMinimumHeight(110)
+        self.setMinimumHeight(150)
         self.heatmap_data: List[Dict[str, Any]] = []
+        self.hover = -1
         self.setMouseTracking(True)
         self.cell_rects = []
+        self.setAccessibleName("Daily activity calendar, last 10 weeks")
 
     def set_data(self, data: List[Dict[str, Any]]):
         self.heatmap_data = data
         self.update()
 
     def mouseMoveEvent(self, event):
-        pos = event.pos()
-        for rect, d in self.cell_rects:
-            if rect.contains(pos.x(), pos.y()):
-                tip = (
-                    f"📅 {d['date']} ({d['day_name']})\n"
-                    f"⏱ Active: {format_duration(d['duration'])}\n"
-                    f"⌨ Keys: {format_number(d['keystrokes'])} · 🖱 Clicks: {format_number(d['clicks'])}"
-                )
-                QToolTip.showText(event.globalPosition().toPoint(), tip, self)
+        pos = event.position()
+        for i, (rect, d) in enumerate(self.cell_rects):
+            if rect.adjusted(-1.5, -1.5, 1.5, 1.5).contains(pos):
+                if i != self.hover:
+                    self.hover = i
+                    self.update()
+                QToolTip.showText(event.globalPosition().toPoint(), (
+                    f"{d['day_name']}, {d['date']}\n"
+                    f"Active {format_duration(d['duration'])}  ·  "
+                    f"{format_number(d['keystrokes'])} keys  ·  {format_number(d['clicks'])} clicks"
+                ), self)
                 return
-        super().mouseMoveEvent(event)
+        if self.hover != -1:
+            self.hover = -1
+            self.update()
+        QToolTip.hideText()
+
+    def leaveEvent(self, event):
+        self.hover = -1
+        self.update()
+        super().leaveEvent(event)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -50,64 +58,53 @@ class HeatmapPainter(QWidget):
         w = float(self.width())
         h = float(self.height())
 
-        first_item = self.heatmap_data[0]
-        start_weekday = first_item.get("weekday", 0)
-
-        # Calculate number of week columns
+        start_weekday = self.heatmap_data[0].get("weekday", 0)
         total_days = len(self.heatmap_data)
         num_cols = max(1, (total_days + start_weekday + 6) // 7)
 
-        left_pad = 30.0
-        top_pad = 12.0
-        gap = 3.5
+        left_pad, top_pad, gap = 34.0, 20.0, 4.0
+        cell_w = (w - left_pad - 4.0 - (num_cols * gap)) / float(num_cols)
+        cell_h = (h - top_pad - 4.0 - (7.0 * gap)) / 7.0
+        cell = max(8.0, min(28.0, min(cell_w, cell_h)))
+        grid_w = num_cols * (cell + gap)
+        x0 = left_pad + max(0.0, (w - left_pad - grid_w) / 2.0)
 
-        # Compute dynamic cell size to fill width & height
-        avail_w = w - left_pad - 16.0
-        avail_h = h - top_pad - 22.0
+        painter.setFont(t.font(11))
+        painter.setPen(QColor(t.TEXT_3))
+        for row, name in ((0, "Mon"), (2, "Wed"), (4, "Fri"), (6, "Sun")):
+            painter.drawText(QRectF(x0 - left_pad, top_pad + row * (cell + gap), left_pad - 8, cell),
+                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, name)
 
-        cell_w = (avail_w - (num_cols * gap)) / float(num_cols)
-        cell_h = (avail_h - (7.0 * gap)) / 7.0
-        cell_size = max(8.0, min(14.0, min(cell_w, cell_h)))
-
-        # Day of week labels on left (Mon, Wed, Fri)
-        painter.setPen(QColor("#64748b"))
-        font = QFont("Inter", 8)
-        painter.setFont(font)
-        painter.drawText(QRectF(0, top_pad + 0 * (cell_size + gap), 24, cell_size), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "Mon")
-        painter.drawText(QRectF(0, top_pad + 2 * (cell_size + gap), 24, cell_size), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "Wed")
-        painter.drawText(QRectF(0, top_pad + 4 * (cell_size + gap), 24, cell_size), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "Fri")
-
-        col = 0
-        row = start_weekday
-
+        col, row = 0, start_weekday
+        last_month, last_label_x = None, -100.0
         for d in self.heatmap_data:
-            x = left_pad + col * (cell_size + gap)
-            y = top_pad + row * (cell_size + gap)
-
-            rect = QRectF(x, y, cell_size, cell_size)
+            x = x0 + col * (cell + gap)
+            y = top_pad + row * (cell + gap)
+            rect = QRectF(x, y, cell, cell)
             self.cell_rects.append((rect, d))
 
-            lvl = min(4, max(0, d.get("level", 0)))
-            color = HEATMAP_COLORS[lvl]
+            # Month label above the first column that starts a new month
+            try:
+                month = datetime.datetime.strptime(d.get("date", ""), "%Y-%m-%d").strftime("%b")
+            except ValueError:
+                month = None
+            if month and month != last_month and (row == 0 or last_month is None):
+                if x - last_label_x >= 32:
+                    painter.setPen(QColor(t.TEXT_3))
+                    painter.drawText(QRectF(x, 0, 40, top_pad - 4), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, month)
+                    last_label_x = x
+                last_month = month
 
-            painter.setBrush(QBrush(color))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(rect, 2.5, 2.5)
+            lvl = min(4, max(0, d.get("level", 0)))
+            painter.setBrush(t.heat(t.SERIES_TIME, lvl / 4.0))
+            idx = len(self.cell_rects) - 1
+            painter.setPen(QPen(QColor(t.TEXT), 1.5) if idx == self.hover else Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(rect, 4, 4)
 
             row += 1
             if row > 6:
                 row = 0
                 col += 1
-
-        # Legend at bottom right
-        leg_x = w - 120
-        leg_y = h - 14
-        painter.drawText(QRectF(leg_x - 30, leg_y - 2, 28, 12), Qt.AlignmentFlag.AlignRight, "Less")
-        for i, c in enumerate(HEATMAP_COLORS):
-            bx = leg_x + i * 13
-            painter.setBrush(QBrush(c))
-            painter.drawRoundedRect(QRectF(bx, leg_y, 9, 9), 2, 2)
-        painter.drawText(QRectF(leg_x + 5 * 13 + 4, leg_y - 2, 30, 12), Qt.AlignmentFlag.AlignLeft, "More")
 
         painter.end()
 
@@ -115,22 +112,15 @@ class HeatmapPainter(QWidget):
 class HeatmapGridWidget(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setProperty("class", "GlassCard")
+        self.setProperty("class", "Card")
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 12, 14, 12)
-        lay.setSpacing(6)
+        lay.setContentsMargins(t.PAD, t.PAD, t.PAD, 14)
+        lay.setSpacing(10)
 
-        # Header
-        hdr = QHBoxLayout()
-        title = QLabel("DAILY ACTIVITY & INPUT HEATMAP")
-        title.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px;")
-        sub = QLabel("Last 10 Weeks")
-        sub.setStyleSheet("font-size: 10px; color: #64748b; font-family: monospace;")
-        hdr.addWidget(title)
-        hdr.addStretch()
-        hdr.addWidget(sub)
+        hdr, _, _ = card_header("Activity calendar", "Last 10 weeks")
+        hdr.addWidget(RampLegend(t.SERIES_TIME))
         lay.addLayout(hdr)
 
         self.painter_widget = HeatmapPainter(self)

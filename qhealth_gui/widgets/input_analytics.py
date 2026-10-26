@@ -1,276 +1,132 @@
-from typing import List, Dict, Any
-from PyQt6.QtCore import Qt, QRectF, QPoint
-from PyQt6.QtWidgets import (
-    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QStackedWidget, QToolTip, QSizePolicy
-)
-from PyQt6.QtGui import QPainter, QColor, QFont, QBrush, QLinearGradient
-from ..utils import format_number, format_duration
+from typing import List, Dict, Any, Optional
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton, QStackedWidget, QSizePolicy
+from .. import theme as t
+from ..utils import format_number
+from .bar_chart import BarChart, input_value
+from .common import card_header
 from .heatmap_grid import HeatmapGridWidget
 from .keyboard_heatmap import KeyboardHeatmapWidget
 from .mouse_heatmap import MouseHeatmapWidget
+from .stat_cards import StatCard
 
 INPUT_TITLES = {
-    "day": "24-HOUR INPUT ACTIVITY DISTRIBUTION",
-    "week": "7-DAY INPUT ACTIVITY DISTRIBUTION",
-    "month": "30-DAY INPUT ACTIVITY DISTRIBUTION",
-    "year": "MONTHLY INPUT ACTIVITY DISTRIBUTION",
-    "all_time": "ALL-TIME INPUT DISTRIBUTION"
+    "day": "Input per hour",
+    "week": "Input per day",
+    "month": "Input per day",
+    "year": "Input per month",
+    "all_time": "Input per month",
 }
-
-class HourlyInputBarsPainter(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setMinimumHeight(110)
-        self.timeline = []
-        self.range_type = "day"
-        self.setMouseTracking(True)
-        self.bar_rects = []
-
-    def set_data(self, timeline: List[Dict[str, Any]], range_type: str = "day"):
-        self.timeline = timeline
-        self.range_type = range_type
-        self.update()
-
-    def mouseMoveEvent(self, event):
-        pos = event.pos()
-        for rect, d, lbl in self.bar_rects:
-            if rect.contains(pos.x(), pos.y()):
-                keys = d.get("keystrokes", 0)
-                clicks = d.get("clicks", 0)
-                tip = f"{lbl}\n⌨ Keys: {format_number(keys)} · 🖱 Clicks: {format_number(clicks)}"
-                QToolTip.showText(event.globalPosition().toPoint(), tip, self)
-                return
-        super().mouseMoveEvent(event)
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        self.bar_rects = []
-        w = float(self.width())
-        h = float(self.height()) - 22.0
-
-        if not self.timeline:
-            painter.end()
-            return
-
-        count = len(self.timeline)
-        col_w = w / float(count)
-        bar_w = max(3.0, min(32.0, col_w - 4.0))
-
-        max_val = max([item.get("keystrokes", 0) + item.get("clicks", 0) for item in self.timeline] + [1])
-
-        for i, item in enumerate(self.timeline):
-            keys = item.get("keystrokes", 0)
-            clicks = item.get("clicks", 0)
-            total = keys + clicks
-
-            x = i * col_w + (col_w - bar_w) / 2.0
-            pct = min(1.0, max(0.04, total / float(max_val)))
-            bar_h = pct * (h - 10)
-            y = h - bar_h
-
-            rect = QRectF(x, y, bar_w, bar_h)
-
-            if self.range_type == "day":
-                lbl_text = f"🕒 {item.get('hour_int', i):02d}:00"
-            elif self.range_type in ("week", "month"):
-                lbl_text = f"📅 {item.get('date', '')} ({item.get('label', '')})"
-            else:
-                lbl_text = f"📅 {item.get('month_str', '')}"
-
-            self.bar_rects.append((rect, item, lbl_text))
-
-            if total > 0:
-                grad = QLinearGradient(x, y, x, h)
-                grad.setColorAt(0, QColor("#22d3ee"))
-                grad.setColorAt(1, QColor("#818cf8"))
-                painter.setBrush(QBrush(grad))
-            else:
-                painter.setBrush(QColor(30, 41, 59, 80))
-
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRoundedRect(rect, 3.0, 3.0)
-
-        # X-axis labels
-        painter.setPen(QColor("#94a3b8"))
-        font = QFont("Inter", 8, QFont.Weight.Medium)
-        painter.setFont(font)
-
-        if self.range_type == "day":
-            labels = [(0, "00:00"), (4, "04:00"), (8, "08:00"), (12, "12:00"), (16, "16:00"), (20, "20:00"), (23, "23:00")]
-            for hour, txt in labels:
-                lx = hour * col_w
-                painter.drawText(QRectF(lx - 10, h + 4, 40, 16), Qt.AlignmentFlag.AlignCenter, txt)
-        elif self.range_type == "week":
-            for i, item in enumerate(self.timeline):
-                lx = i * col_w
-                painter.drawText(QRectF(lx - 6, h + 4, col_w + 12, 16), Qt.AlignmentFlag.AlignCenter, item.get("label", ""))
-        elif self.range_type == "month":
-            for i, item in enumerate(self.timeline):
-                if i % 5 == 0 or i == count - 1:
-                    lx = i * col_w
-                    d_str = item.get("date", "")[-2:]
-                    painter.drawText(QRectF(lx - 10, h + 4, 30, 16), Qt.AlignmentFlag.AlignCenter, d_str)
-        else:
-            for i, item in enumerate(self.timeline):
-                lx = i * col_w
-                m_label = item.get("label", item.get("month_str", "")[-2:])
-                painter.drawText(QRectF(lx - 10, h + 4, col_w + 20, 16), Qt.AlignmentFlag.AlignCenter, m_label)
-
-        painter.end()
 
 
 class InputAnalyticsWidget(QWidget):
+    view_changed = pyqtSignal(int)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         main_lay = QVBoxLayout(self)
         main_lay.setContentsMargins(0, 0, 0, 0)
-        main_lay.setSpacing(12)
+        main_lay.setSpacing(t.GAP)
 
-        # 1. Top Stat Cards (Compact single row)
+        # 1. Totals
         cards_lay = QHBoxLayout()
-        cards_lay.setSpacing(12)
-
-        self.card_keys = QFrame()
-        self.card_keys.setProperty("class", "GlassCard")
-        k_lay = QVBoxLayout(self.card_keys)
-        k_lay.setContentsMargins(14, 10, 14, 10)
-        k_lay.setSpacing(2)
-        k_lbl = QLabel("TOTAL KEYSTROKES")
-        k_lbl.setStyleSheet("font-size: 10px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px;")
-        k_lay.addWidget(k_lbl)
-        self.val_keys = QLabel("0")
-        self.val_keys.setStyleSheet("font-size: 20px; font-weight: 800; color: #34d399; font-family: monospace;")
-        k_lay.addWidget(self.val_keys)
-        cards_lay.addWidget(self.card_keys)
-
-        self.card_clicks = QFrame()
-        self.card_clicks.setProperty("class", "GlassCard")
-        c_lay = QVBoxLayout(self.card_clicks)
-        c_lay.setContentsMargins(14, 10, 14, 10)
-        c_lay.setSpacing(2)
-        c_lbl = QLabel("TOTAL CLICKS")
-        c_lbl.setStyleSheet("font-size: 10px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px;")
-        c_lay.addWidget(c_lbl)
-        self.val_clicks = QLabel("0")
-        self.val_clicks.setStyleSheet("font-size: 20px; font-weight: 800; color: #22d3ee; font-family: monospace;")
-        c_lay.addWidget(self.val_clicks)
-        cards_lay.addWidget(self.card_clicks)
-
-        self.card_scrolls = QFrame()
-        self.card_scrolls.setProperty("class", "GlassCard")
-        s_lay = QVBoxLayout(self.card_scrolls)
-        s_lay.setContentsMargins(14, 10, 14, 10)
-        s_lay.setSpacing(2)
-        s_lbl = QLabel("TOTAL SCROLLS")
-        s_lbl.setStyleSheet("font-size: 10px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px;")
-        s_lay.addWidget(s_lbl)
-        self.val_scrolls = QLabel("0")
-        self.val_scrolls.setStyleSheet("font-size: 20px; font-weight: 800; color: #818cf8; font-family: monospace;")
-        s_lay.addWidget(self.val_scrolls)
-        cards_lay.addWidget(self.card_scrolls)
-
+        cards_lay.setSpacing(t.GAP)
+        self.card_keys = StatCard("KEYSTROKES", t.SERIES_KEYS)
+        self.card_clicks = StatCard("CLICKS", t.SERIES_CLICKS)
+        self.card_scrolls = StatCard("SCROLLS", t.SERIES_SCROLLS)
+        for card in (self.card_keys, self.card_clicks, self.card_scrolls):
+            cards_lay.addWidget(card, 1)
         main_lay.addLayout(cards_lay)
 
-        # 2. View Toggle Bar
+        # 2. View switch
         toggle_bar = QHBoxLayout()
-        toggle_bar.setSpacing(8)
-
         toggle_frame = QFrame()
-        toggle_frame.setProperty("class", "GlassCardInner")
+        toggle_frame.setProperty("class", "Segmented")
         t_lay = QHBoxLayout(toggle_frame)
-        t_lay.setContentsMargins(3, 2, 3, 2)
-        t_lay.setSpacing(4)
+        t_lay.setContentsMargins(3, 3, 3, 3)
+        t_lay.setSpacing(2)
 
-        self.btn_view_hardware = QPushButton("⌨️ Keyboard & Mouse")
-        self.btn_view_hardware.setProperty("class", "TabBtn")
-        self.btn_view_hardware.setCheckable(True)
+        self.btn_view_hardware = QPushButton("Keyboard && mouse")
+        self.btn_view_calendar = QPushButton("Activity calendar")
+        for i, btn in enumerate((self.btn_view_hardware, self.btn_view_calendar)):
+            btn.setProperty("class", "Segment")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _, idx=i: self._switch_view(idx))
+            t_lay.addWidget(btn)
         self.btn_view_hardware.setChecked(True)
-        self.btn_view_hardware.clicked.connect(lambda: self._switch_view(0))
-
-        self.btn_view_calendar = QPushButton("📅 Activity Matrix")
-        self.btn_view_calendar.setProperty("class", "TabBtn")
-        self.btn_view_calendar.setCheckable(True)
-        self.btn_view_calendar.clicked.connect(lambda: self._switch_view(1))
-
-        t_lay.addWidget(self.btn_view_hardware)
-        t_lay.addWidget(self.btn_view_calendar)
 
         toggle_bar.addWidget(toggle_frame)
         toggle_bar.addStretch()
         main_lay.addLayout(toggle_bar)
 
-        # 3. Stacked View Area
+        # 3. Views
         self.view_stack = QStackedWidget()
         self.view_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        # --- VIEW 0: Physical Hardware Heatmaps (Keyboard & Mouse) ---
         page_hw = QWidget()
-        page_hw.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         hw_lay = QHBoxLayout(page_hw)
         hw_lay.setContentsMargins(0, 0, 0, 0)
-        hw_lay.setSpacing(12)
-
+        hw_lay.setSpacing(t.GAP)
         self.keyboard_widget = KeyboardHeatmapWidget(page_hw)
         self.mouse_widget = MouseHeatmapWidget(page_hw)
-
         hw_lay.addWidget(self.keyboard_widget, 72)
         hw_lay.addWidget(self.mouse_widget, 28)
-
         self.view_stack.addWidget(page_hw)
 
-        # --- VIEW 1: Activity Matrix & Hourly Chart ---
         page_cal = QWidget()
-        page_cal.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         cal_lay = QVBoxLayout(page_cal)
         cal_lay.setContentsMargins(0, 0, 0, 0)
-        cal_lay.setSpacing(12)
-
+        cal_lay.setSpacing(t.GAP)
         self.heatmap_calendar = HeatmapGridWidget(page_cal)
         cal_lay.addWidget(self.heatmap_calendar, 5)
 
         chart_card = QFrame()
-        chart_card.setProperty("class", "GlassCard")
-        chart_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        chart_card.setProperty("class", "Card")
         ch_lay = QVBoxLayout(chart_card)
-        ch_lay.setContentsMargins(14, 12, 14, 12)
-        ch_lay.setSpacing(6)
-        self.ch_title_lbl = QLabel("INPUT ACTIVITY DISTRIBUTION")
-        self.ch_title_lbl.setStyleSheet("font-size: 11px; font-weight: 700; color: #94a3b8; letter-spacing: 0.5px;")
-        ch_lay.addWidget(self.ch_title_lbl)
-        self.input_bars = HourlyInputBarsPainter(chart_card)
+        ch_lay.setContentsMargins(t.PAD, t.PAD, t.PAD, 14)
+        ch_lay.setSpacing(12)
+        hdr, self.ch_title_lbl, _ = card_header(INPUT_TITLES["day"], "Keys + clicks")
+        ch_lay.addLayout(hdr)
+        self.input_bars = BarChart(value=input_value, color=t.SERIES_KEYS, axis_format=format_number, parent=chart_card)
+        self.input_bars.setAccessibleName("Key presses and clicks over the selected range")
         ch_lay.addWidget(self.input_bars, 1)
         cal_lay.addWidget(chart_card, 5)
-
         self.view_stack.addWidget(page_cal)
 
         main_lay.addWidget(self.view_stack, 1)
 
     def _switch_view(self, index: int):
+        changed = index != self.view_stack.currentIndex()
         self.view_stack.setCurrentIndex(index)
         self.btn_view_hardware.setChecked(index == 0)
         self.btn_view_calendar.setChecked(index == 1)
+        if changed:
+            self.view_changed.emit(index)  # owner fetches the newly visible view's data
+            t.fade_in(self.view_stack.currentWidget())
 
     def update_data(
         self,
         keys: int,
         clicks: int,
         scrolls: int,
-        key_heatmap: Dict[int, int],
-        mouse_heatmap: Dict[str, int],
-        calendar_heatmap: List[Dict[str, Any]],
+        key_heatmap: Optional[Dict[int, int]],
+        mouse_heatmap: Optional[Dict[str, int]],
+        calendar_heatmap: Optional[List[Dict[str, Any]]],
         timeline: List[Dict[str, Any]],
         range_type: str = "day"
     ):
-        self.val_keys.setText(format_number(keys))
-        self.val_clicks.setText(format_number(clicks))
-        self.val_scrolls.setText(format_number(scrolls))
-        self.keyboard_widget.update_data(key_heatmap, range_type)
-        self.mouse_widget.update_data(mouse_heatmap, range_type)
-        self.heatmap_calendar.update_data(calendar_heatmap)
-        self.ch_title_lbl.setText(INPUT_TITLES.get(range_type, "INPUT ACTIVITY DISTRIBUTION"))
-        self.input_bars.set_data(timeline, range_type)
+        self.card_keys.set_value(format_number(keys), "Key presses")
+        self.card_clicks.set_value(format_number(clicks), "Mouse button presses")
+        self.card_scrolls.set_value(format_number(scrolls), "Wheel steps")
+        # None = that view isn't visible, so its data wasn't fetched
+        if key_heatmap is not None:
+            self.keyboard_widget.update_data(key_heatmap, range_type)
+        if mouse_heatmap is not None:
+            self.mouse_widget.update_data(mouse_heatmap, range_type)
+        if calendar_heatmap is not None:
+            self.heatmap_calendar.update_data(calendar_heatmap)
+            self.ch_title_lbl.setText(INPUT_TITLES.get(range_type, "Input activity"))
+            self.input_bars.set_data(timeline, range_type)

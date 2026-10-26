@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.qssaf.qhealth</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>QHealth</name>
+  <summary>Offline screen time and input activity tracker</summary>
+  <description>
+    <p>
+      QHealth records how long each application is actually used — time only counts while you are
+      at the keyboard or mouse — and shows it as daily, weekly, monthly and yearly breakdowns.
+      Everything stays in a local SQLite database; nothing leaves your computer.
+    </p>
+    <ul>
+      <li>Per-app and per-website screen time with hourly and daily timelines</li>
+      <li>Keyboard and mouse heatmaps plus an activity calendar</li>
+      <li>Daily limits that can close an app once its allowance is used up</li>
+      <li>Focus sessions that only allow the apps you choose</li>
+      <li>A lightweight background service for KDE Plasma on Wayland and X11</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">qhealth.desktop</launchable>
+  <icon type="stock">qhealth</icon>
+  <url type="homepage">https://github.com/Qssaf/qhealth</url>
+  <url type="bugtracker">https://github.com/Qssaf/qhealth/issues</url>
+  <developer id="io.github.qssaf">
+    <name>Qssaf</name>
+  </developer>
+  <categories>
+    <category>Utility</category>
+  </categories>
+  <provides>
+    <binary>qhealth</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="3.0.0" date="2026-10-26">
+      <description>
+        <p>Redesigned interface, much faster range switching, and installable packages.</p>
+      </description>
+    </release>
+  </releases>
+</component>

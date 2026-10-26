@@ -18,8 +18,8 @@ class WeekBarsPainter(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        w = self.width()
-        h = self.height() - 36
+        w = float(self.width())
+        h = max(20.0, float(self.height()) - 36.0)
 
         if not self.days:
             painter.end()
@@ -28,7 +28,7 @@ class WeekBarsPainter(QWidget):
         max_dur = max([d.get("total_duration", 0) for d in self.days] + [1])
         count = len(self.days)
         col_w = w / float(count)
-        bar_w = min(46.0, col_w - 14.0)
+        bar_w = max(4.0, min(50.0, col_w - 14.0 if col_w > 20 else col_w - 4.0))
 
         for i, d in enumerate(self.days):
             dur = d.get("total_duration", 0)
@@ -37,7 +37,7 @@ class WeekBarsPainter(QWidget):
             is_today = (i == count - 1)
 
             pct = max(0.06, dur / float(max_dur))
-            bar_h = pct * (h - 24)
+            bar_h = max(2.0, pct * (h - 24))
             x = i * col_w + (col_w - bar_w) / 2.0
             y = h - bar_h
 
@@ -104,7 +104,7 @@ class WeeklyTrendsWidget(QWidget):
         self.sub_total.setStyleSheet("font-size: 10px; color: #64748b;")
         c1.addWidget(self.val_total)
         c1.addWidget(self.sub_total)
-        cards_lay.addWidget(self.card_total)
+        cards_lay.addWidget(self.card_total, 1)
 
         self.card_keys = QFrame()
         self.card_keys.setProperty("class", "GlassCard")
@@ -116,7 +116,7 @@ class WeeklyTrendsWidget(QWidget):
         self.val_keys.setStyleSheet("font-size: 20px; font-weight: 800; color: #22d3ee; font-family: monospace;")
         c2.addWidget(self.val_keys)
         c2.addWidget(QLabel("Total keyboard activity"))
-        cards_lay.addWidget(self.card_keys)
+        cards_lay.addWidget(self.card_keys, 1)
 
         self.card_clicks = QFrame()
         self.card_clicks.setProperty("class", "GlassCard")
@@ -128,7 +128,7 @@ class WeeklyTrendsWidget(QWidget):
         self.val_clicks.setStyleSheet("font-size: 20px; font-weight: 800; color: #818cf8; font-family: monospace;")
         c3.addWidget(self.val_clicks)
         c3.addWidget(QLabel("Total mouse actions"))
-        cards_lay.addWidget(self.card_clicks)
+        cards_lay.addWidget(self.card_clicks, 1)
 
         main_lay.addLayout(cards_lay)
 

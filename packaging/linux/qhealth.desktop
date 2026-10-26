@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=QHealth
+GenericName=Screen Time Tracker
+Comment=Track screen time, app usage and keyboard/mouse activity, fully offline
+Exec=qhealth
+TryExec=qhealth
+Icon=qhealth
+Terminal=false
+Categories=Qt;KDE;Utility;
+Keywords=screen time;wellbeing;focus;activity;usage;productivity;
+StartupNotify=true
+StartupWMClass=qhealth
+SingleMainWindow=true
