@@ -117,6 +117,14 @@ class BudgetEnforcer:
             force_close_app(a_id, app_name, cur_pid)
 
 
+def _clock_including_sleep() -> float:
+    """A clock that keeps running while the machine sleeps: CLOCK_BOOTTIME on Linux. Windows has no
+    such constant; the wall clock also runs through sleep, and a jump from a clock change only
+    ever counts as a break, never as activity."""
+    boottime = getattr(time, "CLOCK_BOOTTIME", None)
+    return time.clock_gettime(boottime) if boottime is not None else time.time()
+
+
 class BreakReminder:
     """Reminds the user to take a break after N minutes of activity without a 5-minute pause."""
 
@@ -128,7 +136,7 @@ class BreakReminder:
     def check(self, interval_minutes: int, now: Optional[float] = None, boot_now: Optional[float] = None) -> bool:
         """Returns True when a reminder was sent."""
         now = time.monotonic() if now is None else now
-        boot_now = time.clock_gettime(time.CLOCK_BOOTTIME) if boot_now is None else boot_now
+        boot_now = _clock_including_sleep() if boot_now is None else boot_now
         # CLOCK_MONOTONIC (used for input times) stops during suspend; CLOCK_BOOTTIME doesn't,
         # so a long gap between checks means the machine slept, which counts as a break.
         slept = self._last_check_boottime is not None and boot_now - self._last_check_boottime >= BREAK_RESET_SECONDS

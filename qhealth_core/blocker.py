@@ -82,10 +82,11 @@ IMMUNE_WINDOWS: Set[str] = {
     "taskmgr", "conhost", "ctfmon", "fontdrvhost", "runtimebroker", "searchhost", "searchapp",
     "startmenuexperiencehost", "shellexperiencehost", "applicationframehost", "textinputhost", "lockapp",
     "logonui", "securityhealthsystray", "windowsterminal", "openconsole", "cmd", "powershell", "pwsh",
-    "python", "pythonw",
 }
-IMMUNE_APP_IDS |= IMMUNE_WINDOWS
-IMMUNE_EXEC_NAMES |= IMMUNE_WINDOWS
+if IS_WINDOWS:
+    # QHealth's own process is protected by PID (is_immune), so no blanket python.exe rule here
+    IMMUNE_APP_IDS |= IMMUNE_WINDOWS
+    IMMUNE_EXEC_NAMES |= IMMUNE_WINDOWS
 
 _last_notification_time: Dict[str, float] = {}
 

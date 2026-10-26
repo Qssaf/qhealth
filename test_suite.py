@@ -99,7 +99,8 @@ class TestDatabase(unittest.TestCase):
         
         # Verify app resolution in DB query
         top_app = day_stats["apps"][0] # Firefox (300s)
-        self.assertEqual(top_app["app_name"], "Firefox")
+        # Display name comes from the host's .desktop file ("Firefox", "Firefox Web Browser", ...)
+        self.assertIn("Firefox", top_app["app_name"])
         self.assertEqual(top_app["category"], "Browsing")
         self.assertGreater(top_app["percentage"], 70.0)
 
@@ -1530,6 +1531,17 @@ class TestFocusSession(unittest.TestCase):
 
 
 class TestPlatformLayer(unittest.TestCase):
+    def test_immune_process_names_are_per_platform(self):
+        from qhealth_core.blocker import IMMUNE_EXEC_NAMES, is_immune
+        self.assertEqual("explorer" in IMMUNE_EXEC_NAMES, sys.platform == "win32")
+        self.assertNotIn("python", IMMUNE_EXEC_NAMES)  # any Python GUI app must stay blockable
+        self.assertFalse(is_immune("python"))
+
+    def test_break_clock_runs_on_every_platform(self):
+        from qhealth_core.wellbeing import _clock_including_sleep
+        a = _clock_including_sleep()
+        self.assertGreaterEqual(_clock_including_sleep(), a)
+
     def test_scan_codes_map_to_evdev(self):
         from qhealth_core.keymap import scancode_to_evdev
         self.assertEqual(scancode_to_evdev(0x10, False), 16)    # Q
